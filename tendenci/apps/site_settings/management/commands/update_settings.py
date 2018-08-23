@@ -3,9 +3,10 @@ import os
 import simplejson as json
 
 from django.conf import settings as django_settings
-from django.core.management.base import BaseCommand, CommandError
+from django.core.management.base import BaseCommand
 
 from tendenci.apps.site_settings.models import Setting
+from tendenci.apps.theme.utils import get_theme_root
 
 
 class Command(BaseCommand):
@@ -55,7 +56,7 @@ class Command(BaseCommand):
             "label": "enabled",
             "description": "Module is enabled or not.",
             "data_type": "boolean",
-            "default_value": "true",
+            "default_value": true,
             "input_type": "select",
             "input_value": "true, false",
             "client_editable": "1",
@@ -106,7 +107,7 @@ class Command(BaseCommand):
         ]
         for setting in settings:
             # check the required fields
-            req_list = [k for k in setting.keys() if k in required_keys]
+            req_list = [k for k in setting if k in required_keys]
             if len(req_list) != len(required_keys):
                 print('Setting does not have the required fields ... skipping.')
                 continue
@@ -161,18 +162,19 @@ class Command(BaseCommand):
         for appname in appnames:
             print()
             print('Processing for %s ...' % appname)
-            if appname.startswith('addons.') or appname.startswith('themes.'):
+            if appname.startswith('addons.'):
                 json_file = os.path.abspath(os.path.join(
                                 django_settings.PROJECT_ROOT,
-                                '/'.join(appname.split('.')),
+                                os.path.join(*appname.split('.')),
                                 'settings.json'
                             ))
+            elif appname.startswith('themes.'):
+                theme_root = get_theme_root(appname[len('themes.'):])
+                json_file = os.path.join(theme_root, 'settings.json')
             else:
-                if appname.find('.') != -1:
-                    appname = appname.replace('.', '/')
                 json_file = os.path.abspath(os.path.join(
-                                django_settings.TENDENCI_ROOT,'..',
-                                '/'.join(appname.split('.')),
+                                django_settings.TENDENCI_ROOT, '..',
+                                os.path.join(*appname.split('.')),
                                 'settings.json'
                             ))
             if os.path.isfile(json_file):

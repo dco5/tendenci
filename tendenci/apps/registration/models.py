@@ -11,7 +11,7 @@ from django.contrib.auth.models import User
 from django.contrib.sites.models import Site
 
 
-SHA1_RE = re.compile('^[a-f0-9]{40}$')
+SHA1_RE = re.compile(r'^[a-f0-9]{40}$')
 
 
 class RegistrationManager(models.Manager):
@@ -114,13 +114,13 @@ class RegistrationManager(models.Manager):
             from django.core.mail import send_mail
             current_site = Site.objects.get_current()
 
-            subject = render_to_string('registration/activation_email_subject.txt',
-                                       { 'site': current_site })
+            subject = render_to_string(template_name='registration/activation_email_subject.txt',
+                                       context={ 'site': current_site })
             # Email subject *must not* contain newlines
             subject = ''.join(subject.splitlines())
 
-            message = render_to_string('registration/activation_email.txt',
-                                       { 'activation_key': registration_profile.activation_key,
+            message = render_to_string(template_name='registration/activation_email.txt',
+                                       context={ 'activation_key': registration_profile.activation_key,
                                          'expiration_days': settings.ACCOUNT_ACTIVATION_DAYS,
                                          'site': current_site })
 
@@ -137,8 +137,8 @@ class RegistrationManager(models.Manager):
         username and a random salt.
 
         """
-        salt = hashlib.sha1(str(random.random())).hexdigest()[:5]
-        activation_key = hashlib.sha1(salt+user.username).hexdigest()
+        salt = hashlib.sha1(str(random.random()).encode()).hexdigest()[:5]
+        activation_key = hashlib.sha1((salt+user.username).encode()).hexdigest()
         return self.create(user=user,
                            activation_key=activation_key)
 
@@ -210,7 +210,7 @@ class RegistrationProfile(models.Model):
     """
     ACTIVATED = u"ALREADY_ACTIVATED"
 
-    user = models.OneToOneField(User, verbose_name=_('user'))
+    user = models.OneToOneField(User, verbose_name=_('user'), on_delete=models.CASCADE)
     activation_key = models.CharField(_('activation key'), max_length=40)
 
     objects = RegistrationManager()
@@ -219,8 +219,8 @@ class RegistrationProfile(models.Model):
         verbose_name = _('registration profile')
         verbose_name_plural = _('registration profiles')
 
-    def __unicode__(self):
-        return u"Registration information for %s" % self.user
+    def __str__(self):
+        return "Registration information for %s" % self.user
 
     def activation_key_expired(self):
         """

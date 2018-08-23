@@ -1,7 +1,7 @@
 from django.contrib import admin
-from django.core.urlresolvers import reverse
-from django.conf import settings
+from django.urls import reverse
 from django.utils.translation import ugettext_lazy as _
+from django.utils.safestring import mark_safe
 
 from tendenci.apps.event_logs.models import EventLog
 from tendenci.apps.perms.utils import get_notice_recipients
@@ -9,6 +9,7 @@ from tendenci.apps.perms.utils import update_perms_and_save
 from tendenci.apps.meta.models import Meta as MetaTags
 from tendenci.apps.pages.models import Page
 from tendenci.apps.pages.forms import PageAdminForm
+from tendenci.apps.theme.templatetags.static import static
 
 try:
     from tendenci.apps.notifications import models as notification
@@ -45,26 +46,27 @@ class PageAdmin(admin.ModelAdmin):
 
     class Media:
         js = (
-            '%sjs/global/tinymce.event_handlers.js' % settings.STATIC_URL,
+            static('js/global/tinymce.event_handlers.js'),
         )
 
+    @mark_safe
     def link(self, obj):
         return '<a href="%s" title="%s">%s</a>' % (
             obj.get_absolute_url(),
             obj.title,
             obj.slug
         )
-    link.allow_tags = True
     link.admin_order_field = 'slug'
 
+    @mark_safe
     def edit_link(self, obj):
         link = '<a href="%s" title="edit">Edit</a>' % reverse('admin:pages_page_change', args=[obj.pk])
         return link
-    edit_link.allow_tags = True
     edit_link.short_description = _('edit')
 
+    @mark_safe
     def view_on_site(self, obj):
-        link_icon = '%simages/icons/external_16x16.png' % settings.STATIC_URL
+        link_icon = static('images/icons/external_16x16.png')
         link = '<a href="%s" title="%s"><img src="%s" alt="%s" title="%s" /></a>' % (
             reverse('page', args=[obj.slug]),
             obj.title,
@@ -73,7 +75,6 @@ class PageAdmin(admin.ModelAdmin):
             obj.title
         )
         return link
-    view_on_site.allow_tags = True
     view_on_site.short_description = _('view')
 
     def log_deletion(self, request, object, object_repr):
@@ -102,8 +103,8 @@ class PageAdmin(admin.ModelAdmin):
         }
         EventLog.objects.log(**log_defaults)
 
-    def log_addition(self, request, object):
-        super(PageAdmin, self).log_addition(request, object)
+    def log_addition(self, request, object, message):
+        super(PageAdmin, self).log_addition(request, object, message)
         log_defaults = {
             'event_id' : 581000,
             'event_data': '%s (%d) added by %s' % (object._meta.object_name,

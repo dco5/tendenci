@@ -1,0 +1,26 @@
+{% extends "stories/base.html" %}
+{% load base_filters %}
+{% load base_tags %}
+{% load category_tags %}
+{% load story_tags %}
+
+
+{% block title %}{{ block.super }}{{ story.title }}{% endblock %}
+
+{% block content %}
+    <article id="t-stories-story-{{ story.pk }}" class="t-stories-story">
+        {% if story.image %}
+            <img src="{% image_url story.image size=300x300 crop=True quality=88 %}" title="{{ story.title|truncatechars:123 }}" alt="{{ story.title|truncatechars:123 }}">
+        {% endif %}
+
+        <div class="page-header">
+            <h1>{{ story.title }}</h1>
+        </div>
+
+        <div class="t-stories-story-body">
+            {{ story.content|safe }}
+        </div>
+
+        {% include "stories/meta.html" %}
+    </article>
+{% endblock %}

@@ -7,12 +7,11 @@ http://code.djangoproject.com/wiki/CustomWidgetsTinyMCE
 """
 from __future__ import unicode_literals
 
-import tendenci.libs.tinymce.settings as tinymce_settings
 from django import forms
 from django.conf import settings
 from django.contrib.admin import widgets as admin_widgets
-from django.core.urlresolvers import reverse
-from django.forms.widgets import flatatt
+from django.urls import reverse
+from django.forms.utils import flatatt
 from django.utils.html import escape
 try:
     from collections import OrderedDict as SortedDict
@@ -22,12 +21,14 @@ from django.utils.safestring import mark_safe
 from django.utils.translation import get_language, ugettext as _
 import json
 try:
-    from django.utils.encoding import smart_text as smart_unicode
+    from django.utils.encoding import smart_text as smart_text
 except ImportError:
     try:
-        from django.utils.encoding import smart_unicode
+        from django.utils.encoding import smart_text
     except ImportError:
-        from django.forms.util import smart_unicode
+        from django.forms.util import smart_text
+import tendenci.libs.tinymce.settings as tinymce_settings
+from tendenci.apps.theme.templatetags.static import static
 
 
 class TinyMCE(forms.Textarea):
@@ -81,11 +82,11 @@ class TinyMCE(forms.Textarea):
             mce_json = mce_json[:index]+', '+k+':'+js_functions[k].strip()+mce_json[index:]
         return mce_json
 
-    def render(self, name, value, attrs=None):
+    def render(self, name, value, attrs=None, renderer=None):
         if value is None:
             value = ''
-        value = smart_unicode(value)
-        final_attrs = self.build_attrs(attrs)
+        value = smart_text(value)
+        final_attrs = attrs.copy()
         final_attrs['name'] = name
         final_attrs['class'] = 'tinymce'
         assert 'id' in final_attrs, "TinyMCE widget attributes must contain 'id'"
@@ -111,8 +112,8 @@ class TinyMCE(forms.Textarea):
             js = [tinymce_settings.JS_URL]
         if tinymce_settings.USE_FILEBROWSER:
             js.append(reverse('tinymce-filebrowser'))
-        js.append('django_tinymce/init_tinymce.js')
-        css = {'all': ('django_tinymce/custom.css',)}
+        js.append(static('tiny_mce/init_tinymce.js'))
+        css = {'all': (static('tiny_mce/custom.css'),)}
         return forms.Media(js=js, css=css)
     media = property(_media)
 
@@ -152,6 +153,6 @@ def get_language_config(content_language=None):
         config['directionality'] = 'ltr'
 
     if tinymce_settings.USE_SPELLCHECKER:
-        config['spellchecker_rpc_url'] = reverse('tinymce.views.spell_check')
+        config['spellchecker_rpc_url'] = reverse('tinymce-spellcheck')
 
     return config

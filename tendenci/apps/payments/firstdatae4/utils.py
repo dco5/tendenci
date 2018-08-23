@@ -4,7 +4,7 @@ import hashlib
 from django.conf import settings
 from django.http import Http404
 from django.db import transaction
-from forms import PaymentForm
+from .forms import PaymentForm
 from tendenci.apps.payments.models import Payment
 from tendenci.apps.payments.utils import payment_processing_object_updates
 from tendenci.apps.payments.utils import log_payment, send_payment_notice
@@ -17,7 +17,7 @@ def get_fingerprint(x_fp_sequence, x_fp_timestamp, x_amount):
            x_amount
            ])+'^'
 
-    return hmac.new(settings.MERCHANT_TXN_KEY, msg).hexdigest()
+    return hmac.new(settings.MERCHANT_TXN_KEY.encode(), msg.encode()).hexdigest()
 
 def prepare_firstdatae4_form(request, payment):
     x_fp_timestamp = str(int(time.time()))
@@ -91,7 +91,7 @@ def firstdatae4_thankyou_processing(request, response_d, **kwargs):
         amount = response_d.get('x_amount', 0)
 
         s = '%s%s%s%s' % (response_key, api_login_id, t_id, amount)
-        my_md5_hash = hashlib.md5(s).hexdigest()
+        my_md5_hash = hashlib.md5(s.encode()).hexdigest()
 
         if settings.FIRSTDATA_USE_RELAY_RESPONSE:
             if my_md5_hash.lower() != md5_hash.lower():

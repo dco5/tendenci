@@ -1,5 +1,5 @@
+from builtins import str
 import re
-from time import strptime, strftime
 #from south.modelsinspector import add_introspection_rules
 
 from django.forms import fields, ValidationError
@@ -11,13 +11,13 @@ from django.core import exceptions
 from django_countries import countries as COUNTRIES
 
 from tendenci.apps.base import forms
-from tendenci.apps.base.widgets import SplitDateTimeWidget, EmailVerificationWidget, PriceWidget
+from tendenci.apps.base.widgets import EmailVerificationWidget, PriceWidget
 from tendenci.apps.site_settings.utils import get_setting
 
 
 # # introspection rules for south migration for the slugfield
-# add_introspection_rules([], ['^tendenci\.apps\.base\.fields\.SlugField'])
-# add_introspection_rules([], ['^tendenci\.apps\.base\.fields\.DictField'])
+# add_introspection_rules([], [r'^tendenci\.apps\.base\.fields\.SlugField'])
+# add_introspection_rules([], [r'^tendenci\.apps\.base\.fields\.DictField'])
 
 
 class SlugField(CharField):
@@ -41,53 +41,17 @@ class SlugField(CharField):
         defaults.update(kwargs)
         return super(SlugField, self).formfield(**defaults)
 
-class SplitDateTimeField(fields.MultiValueField):
-    """
-        Custom split date time widget
-        Modified version of http://www.copiesofcopies.org/webl/?p=81
-    """
-    widget = SplitDateTimeWidget
-
-    def __init__(self, *args, **kwargs):
-        """
-        Have to pass a list of field types to the constructor, else we
-        won't get any data to our compress method.
-        """
-        all_fields = (
-            fields.CharField(max_length=10),
-            fields.CharField(max_length=8),
-            )
-        super(SplitDateTimeField, self).__init__(all_fields, *args, **kwargs)
-
-    def compress(self, data_list):
-        """
-        Takes the values from the MultiWidget and passes them as a
-        list to this function. This function needs to compress the
-        list into a single object to save.
-        """
-        if data_list:
-            if not (data_list[0] and data_list[1]):
-                raise ValidationError(_("Field is missing data."))
-            try:
-                input_time = strptime("%s" % (data_list[1]), "%I:%M %p")
-                datetime_string = "%s %s" % (data_list[0], strftime('%H:%M', input_time))
-            except:
-                raise ValidationError(_("Time Format is incorrect. Must be Hour:Minute AM|PM"))
-            return datetime_string
-        return None
-
 
 class DictField(models.TextField):
     """
     A dictionary field
     """
-    __metaclass__ = models.SubfieldBase
 
     def to_python(self, value):
         if not value:
             return {}
 
-        if isinstance(value, basestring):
+        if isinstance(value, str):
             try:
                 return simplejson.loads(value)
             except (ValueError, TypeError):
@@ -99,11 +63,14 @@ class DictField(models.TextField):
 
         return {}
 
+    def from_db_value(self, value, expression, connection, context):
+        return self.to_python(value)
+
     def get_prep_value(self, value):
         if isinstance(value, dict):
             return simplejson.dumps(value)
 
-        if isinstance(value, basestring):
+        if isinstance(value, str):
             return value
 
         return ''
@@ -168,10 +135,10 @@ class PriceField(fields.DecimalField):
 
     def clean(self, value):
         comma_setting = get_setting('site', 'global', 'allowdecimalcommas')
-        if comma_setting and ',' in value:
+        if comma_setting and value is not None and ',' in value:
             comma_validator = re.compile(r'^[0-9]{1,3}(,[0-9]{3})*(\.[0-9]+)?$')
             if comma_validator.match(value):
-                value = re.sub(',', '', value)
+                value = re.sub(r',', '', value)
             else:
                 raise ValidationError(self.error_messages['invalid'])
 

@@ -1,18 +1,18 @@
+from builtins import str
 import os
 import math
-from datetime import datetime, date, time
+from datetime import datetime, date, time, timedelta
 import csv
 import operator
 from hashlib import md5
-from sets import Set
 import subprocess
 import mimetypes
+from functools import reduce
 
 from django.contrib.admin.views.decorators import staff_member_required
-from django.template import RequestContext
-from django.shortcuts import get_object_or_404, render_to_response, redirect
+from django.shortcuts import get_object_or_404, redirect
 from django.http import HttpResponseRedirect, HttpResponse
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.contrib.auth.decorators import login_required
 from django.contrib import messages
 from django.contrib.auth.models import User
@@ -26,6 +26,9 @@ from django.http import Http404
 from django.db.models import ForeignKey, OneToOneField
 from django.db.models.fields import AutoField
 from django.utils.translation import ugettext_lazy as _
+from django.db.models.functions import Lower
+
+from tendenci.apps.theme.shortcuts import themed_response as render_to_resp
 
 from tendenci.libs.utils import python_executable
 
@@ -63,10 +66,10 @@ from tendenci.apps.corporate_memberships.forms import (
                                          CorpMembershipRepForm,
                                          CreatorForm,
                                          CorpApproveForm,
+                                         ReportByTypeForm,
+                                         ReportByStatusForm
                                          )
 from tendenci.apps.corporate_memberships.utils import (
-                                         get_corporate_membership_type_choices,
-                                         get_payment_method_choices,
                                          get_indiv_memberships_choices,
                                          corp_membership_rows,
                                          corp_membership_update_perms,
@@ -86,6 +89,7 @@ from tendenci.apps.base.utils import send_email_notification
 from tendenci.apps.profiles.models import Profile
 from tendenci.apps.site_settings.utils import get_setting
 
+
 @is_enabled('corporate_memberships')
 @staff_member_required
 def free_passes_list(request,
@@ -99,7 +103,7 @@ def free_passes_list(request,
                             ).order_by('corp_profile__name')
 
     context = {'corp_memberships': corp_memberships}
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
 
 
 @is_enabled('corporate_memberships')
@@ -124,7 +128,7 @@ def free_passes_edit(request, id,
 
     context = {'corp_membership': corp_membership,
                'form': form}
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
 
 
 @is_enabled('corporate_memberships')
@@ -137,8 +141,7 @@ def get_app_fields_json(request):
     if not request.user.profile.is_superuser:
         raise Http403
 
-    app_fields = render_to_string('corporate_memberships/app_fields.json',
-                               {}, context_instance=None)
+    app_fields = render_to_string(template_name='corporate_memberships/app_fields.json')
 
     return HttpResponse(simplejson.dumps(simplejson.loads(app_fields)), content_type="application/json")
 
@@ -169,7 +172,7 @@ def app_preview(request, slug,
                "app_fields": app_fields,
                'corpprofile_form': corpprofile_form,
                'corpmembership_form': corpmembership_form}
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
 
 
 @is_enabled('corporate_memberships')
@@ -183,7 +186,7 @@ def corpmembership_add_pre(request,
     if request.method == "POST":
         if form.is_valid():
             creator = form.save()
-            hash = md5('%d.%s' % (creator.id, creator.email)
+            hash = md5(('%d.%s' % (creator.id, creator.email)).encode()
                        ).hexdigest()
             creator.hash = hash
             creator.save()
@@ -197,7 +200,7 @@ def corpmembership_add_pre(request,
 
     context = {"form": form,
                'corp_app': app}
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
 
 
 @is_enabled('corporate_memberships')
@@ -208,7 +211,7 @@ def corpmembership_add(request, slug='',
     """
     creator = None
     hash = request.GET.get('hash', '')
-    if not request.user.is_authenticated():
+    if not request.user.is_authenticated:
         if hash:
             [creator] = Creator.objects.filter(hash=hash)[:1] or [None]
         if not creator:
@@ -285,7 +288,7 @@ def corpmembership_add(request, slug='',
             corp_membership.invoice = inv
             corp_membership.save(log=False)
 
-            if request.user.is_authenticated():
+            if request.user.is_authenticated:
                 # set the user as representative of the corp. membership
                 CorpMembershipRep.objects.create(
                     corp_profile=corp_membership.corp_profile,
@@ -350,7 +353,7 @@ def corpmembership_add(request, slug='',
                "app_fields": app_fields,
                'corpprofile_form': corpprofile_form,
                'corpmembership_form': corpmembership_form}
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
 
 
 @is_enabled('corporate_memberships')
@@ -367,7 +370,7 @@ def corpmembership_add_conf(request, id,
 
     context = {"corporate_membership": corp_membership,
                'app': app}
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
 
 
 @is_enabled('corporate_memberships')
@@ -429,7 +432,7 @@ def corpmembership_upgrade(request, id,
                'corp_profile': corp_profile,
                'corpmembership_form': corpmembership_form,
                'types_count': types_count}
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
 
 
 @is_enabled('corporate_memberships')
@@ -515,7 +518,44 @@ def corpmembership_edit(request, id,
                'corp_membership': corp_membership,
                'corpprofile_form': corpprofile_form,
                'corpmembership_form': corpmembership_form}
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
+
+
+@is_enabled('corporate_memberships')
+@staff_member_required
+def corpprofile_view(request, id, template="corporate_memberships/profiles/view.html"):
+    """
+        view a corp profile - superuser only
+    """
+    if not request.user.is_superuser:
+        raise Http403
+
+    corp_profile = get_object_or_404(CorpProfile, id=id)
+    corp_membership = corp_profile.corp_membership
+    reps = corp_profile.reps.all()
+    memberships = MembershipDefault.objects.filter(
+                        corp_profile_id=corp_profile.id
+                        ).exclude(
+                        status_detail__in=('archive', 'pending'))
+    members_count = memberships.count()
+    members_first10 = memberships.order_by('user__first_name', 'user__last_name')[:10]
+    all_records = corp_profile.corp_memberships.all().order_by('-create_dt')
+    invoices = [corp_mem.invoice for corp_mem in all_records if corp_mem.invoice]
+    address_list = [a for a in [corp_profile.address, corp_profile.address2, corp_profile.city,
+                    corp_profile.state, corp_profile.zip] if a.strip()]
+    address_str = ', '.join(address_list)
+
+    return render_to_resp(request=request, template_name=template,
+                  context={
+                   'corp_profile': corp_profile,
+                   'address_str': address_str,
+                   'corp_membership': corp_membership,
+                   'members_count': members_count,
+                   'members_first10': members_first10,
+                   'reps': reps,
+                   'all_records': all_records,
+                   'invoices': invoices
+                   })
 
 
 @is_enabled('corporate_memberships')
@@ -629,7 +669,7 @@ def corpmembership_view(request, id,
                'app_fields': app_fields,
                'app': app,
                'user_can_edit': can_edit}
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
 
 
 @is_enabled('corporate_memberships')
@@ -673,7 +713,7 @@ def corpmembership_search(request, my_corps_only=False,
                                      'corporate_memberships',
                                      'anonymoussearchcorporatemembers')
 
-    if not request.user.is_authenticated():
+    if not request.user.is_authenticated:
         if my_corps_only or not allow_anonymous_search:
             raise Http403
     is_superuser = request.user.profile.is_superuser
@@ -692,7 +732,8 @@ def corpmembership_search(request, my_corps_only=False,
                    'email', 'url']
 
     search_form = CorpMembershipSearchForm(request.GET,
-                                           names_list=names_list)
+                                           names_list=names_list,
+                                           user=request.user)
     try:
         cp_id = int(request.GET.get('cp_id'))
     except:
@@ -749,10 +790,15 @@ def corpmembership_search(request, my_corps_only=False,
         search_criteria = search_form.cleaned_data['search_criteria']
         search_text = search_form.cleaned_data['search_text']
         search_method = search_form.cleaned_data['search_method']
+        active_only = search_form.cleaned_data['active_only']
     else:
         search_criteria = None
         search_text = None
         search_method = None
+        active_only = False
+  
+    if active_only:
+        corp_members = corp_members.filter(status_detail='active')
 
     if search_criteria and search_text:
         search_type = '__iexact'
@@ -771,15 +817,15 @@ def corpmembership_search(request, my_corps_only=False,
 
         corp_members = corp_members.filter(**search_filter)
     #corp_members = corp_members.order_by('-expiration_dt')
-    corp_members = corp_members.order_by('corp_profile__name')
+    corp_members = corp_members.order_by(Lower('corp_profile__name'))
 
     EventLog.objects.log()
 
-    return render_to_response(template_name, {
+    return render_to_resp(request=request, template_name=template_name,
+        context={
         'pending_only': pending_only,
         'corp_members': corp_members,
-        'search_form': search_form},
-        context_instance=RequestContext(request))
+        'search_form': search_form})
 
 
 @is_enabled('corporate_memberships')
@@ -789,9 +835,9 @@ def corpmembership_cap_status(request, template_name="corporate_memberships/appl
     corp_memberships = CorpMembership.objects.exclude(status_detail='archive'
                                     ).order_by('corp_profile__name')
 
-    return render_to_response(template_name, {
-        'corp_memberships': corp_memberships},
-        context_instance=RequestContext(request))
+    return render_to_resp(request=request, template_name=template_name,
+        context={
+        'corp_memberships': corp_memberships})
 
 
 @is_enabled('corporate_memberships')
@@ -829,8 +875,8 @@ def corpmembership_delete(request, id,
 
             return HttpResponseRedirect(reverse('corpmembership.search'))
 
-        return render_to_response(template_name, {'corp_memb': corp_memb},
-            context_instance=RequestContext(request))
+        return render_to_resp(request=request, template_name=template_name,
+            context={'corp_memb': corp_memb})
     else:
         raise Http403
 
@@ -923,7 +969,7 @@ def corpmembership_approve(request, id,
                'new_expiration_dt': new_expiration_dt,
                'approve_form': approve_form,
                }
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
 
 
 @is_enabled('corporate_memberships')
@@ -935,7 +981,8 @@ def corp_renew(request, id,
     if not has_perm(request.user,
                     'corporate_memberships.change_corpmembership',
                     corp_membership):
-        if not corp_membership.allow_edit_by(request.user):
+        # allow renewal for reps - reps are supposed to have the change permission, but they might not have for some reason
+        if not (corp_membership.allow_edit_by(request.user) or corp_membership.is_rep(request.user)):
             raise Http403
 
     if corp_membership.is_renewal_pending:
@@ -1014,6 +1061,10 @@ def corp_renew(request, id,
                                         **opt_d)
                 new_corp_membership.invoice = inv
                 new_corp_membership.save()
+                
+                # assign object permissions
+                corp_membership_update_perms(new_corp_membership)
+
 
                 EventLog.objects.log(instance=corp_membership)
 
@@ -1125,7 +1176,7 @@ def corp_renew(request, id,
                'summary_data': summary_data,
                'cap_enabled': cap_enabled
                }
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
 
 
 @is_enabled('corporate_memberships')
@@ -1146,7 +1197,7 @@ def corp_renew_conf(request, id,
                'corp_profile': corp_membership.corp_profile,
                'corp_app': corpmembership_app,
                }
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
 
 
 @is_enabled('corporate_memberships')
@@ -1263,14 +1314,14 @@ def roster_search(request,
     if corp_profile:
         is_rep = corp_profile.is_rep(request.user)
 
-    return render_to_response(template_name, {
+    return render_to_resp(request=request, template_name=template_name,
+            context={
                                   'corp_membership': corp_membership,
                                   'corp_profile': corp_profile,
                                   'memberships': memberships,
                                   'active_only': active_only,
                                   'is_rep': is_rep,
-                                  'form': form},
-            context_instance=RequestContext(request))
+                                  'form': form})
 
 
 @is_enabled('corporate_memberships')
@@ -1306,18 +1357,17 @@ def import_upload(request,
     corp_memb_fks = [field.name for field in CorpMembership._meta.fields
                 if isinstance(field, (ForeignKey, OneToOneField))]
 
-    fks = Set(corp_profile_fks + corp_memb_fks)
-    fks = [field for field in fks]
+    fks = corp_profile_fks + corp_memb_fks
     if 'corp_profile' in fks:
         fks.remove('corp_profile')
     fks.sort()
     foreign_keys = ', '.join(fks)
 
-    return render_to_response(template, {
+    return render_to_resp(request=request, template_name=template, context={
         'form': form,
         'corp_memb_type_exists': corp_memb_type_exists,
         'foreign_keys': foreign_keys
-        }, context_instance=RequestContext(request))
+        })
 
 
 @is_enabled('corporate_memberships')
@@ -1353,7 +1403,7 @@ def import_preview(request, mimport_id,
         max_num_in_group = 10
         if num_pages > start_num:
             # first group
-            page_range = range(1, max_num_in_group + 1)
+            page_range = list(range(1, max_num_in_group + 1))
             # middle group
             i = curr_page - int(max_num_in_group / 2)
             if i <= max_num_in_group:
@@ -1363,14 +1413,14 @@ def import_preview(request, mimport_id,
             j = i + max_num_in_group
             if j > num_pages - max_num_in_group:
                 j = num_pages - max_num_in_group
-            page_range.extend(range(i, j + 1))
+            page_range.extend(list(range(i, j + 1)))
             if j < num_pages - max_num_in_group:
                 page_range.extend(['...'])
             # last group
-            page_range.extend(range(num_pages - max_num_in_group,
-                                    num_pages + 1))
+            page_range.extend(list(range(num_pages - max_num_in_group,
+                                         num_pages + 1)))
         else:
-            page_range = range(1, num_pages + 1)
+            page_range = list(range(1, num_pages + 1))
 
         # slice the data_list
         start_index = (curr_page - 1) * num_items_per_page + 2
@@ -1393,9 +1443,9 @@ def import_preview(request, mimport_id,
             corp_memb_display['row_num'] = idata.row_num
             corp_membs_list.append(corp_memb_display)
             if not fieldnames:
-                fieldnames = idata.row_data.keys()
+                fieldnames = list(idata.row_data.keys())
 
-        return render_to_response(template, {
+        return render_to_resp(request=request, template_name=template, context={
             'mimport': mimport,
             'corp_membs_list': corp_membs_list,
             'curr_page': curr_page,
@@ -1405,7 +1455,7 @@ def import_preview(request, mimport_id,
             'num_pages': num_pages,
             'page_range': page_range,
             'fieldnames': fieldnames,
-            }, context_instance=RequestContext(request))
+            })
     else:
         if mimport.status in ('processing', 'completed'):
             pass
@@ -1417,9 +1467,9 @@ def import_preview(request, mimport_id,
                               "corp_membership_import_preprocess",
                               str(mimport.pk)])
 
-            return render_to_response(template, {
+            return render_to_resp(request=request, template_name=template, context={
                 'mimport': mimport,
-                }, context_instance=RequestContext(request))
+                })
 
 
 @is_enabled('corporate_memberships')
@@ -1480,9 +1530,9 @@ def import_status(request, mimport_id,
     if mimport.status not in ('processing', 'completed'):
         return redirect(reverse('corpmembership.import'))
 
-    return render_to_response(template_name, {
+    return render_to_resp(request=request, template_name=template_name, context={
         'mimport': mimport,
-        }, context_instance=RequestContext(request))
+        })
 
 
 @is_enabled('corporate_memberships')
@@ -1593,8 +1643,7 @@ def corpmembership_export(request,
             corp_memb_fks = [field.name for field in CorpMembership._meta.fields
                         if isinstance(field, (ForeignKey, OneToOneField))]
 
-            fks = Set(corp_profile_fks + corp_memb_fks)
-            #fks = [field for field in fks]
+            fks = corp_profile_fks + corp_memb_fks
 
             filename = 'corporate_memberships_export.csv'
             response = HttpResponse(content_type='text/csv')
@@ -1616,8 +1665,6 @@ def corpmembership_export(request,
                             row_item_list[i] = row_item_list[i].strftime('%Y-%m-%d')
                         elif isinstance(row_item_list[i], time):
                             row_item_list[i] = row_item_list[i].strftime('%H:%M:%S')
-                        elif isinstance(row_item_list[i], basestring):
-                            row_item_list[i] = row_item_list[i].encode("utf-8")
                 csv_writer.writerow(row_item_list)
 
             # log an event
@@ -1625,7 +1672,7 @@ def corpmembership_export(request,
             # switch to StreamingHttpResponse once we're on 1.5
             return response
     context = {"form": form}
-    return render_to_response(template, context, RequestContext(request))
+    return render_to_resp(request=request, template_name=template, context=context)
 
 
 @is_enabled('corporate_memberships')
@@ -1657,10 +1704,10 @@ def edit_corp_reps(request, id, form_class=CorpMembershipRepForm,
                 return HttpResponseRedirect(reverse('corpmembership.view',
                                                     args=[corp_memb.id]))
 
-    return render_to_response(template_name, {'corp_membership': corp_memb,
+    return render_to_resp(request=request, template_name=template_name,
+        context={'corp_membership': corp_memb,
                                               'form': form,
-                                              'reps': reps},
-        context_instance=RequestContext(request))
+                                              'reps': reps})
 
 
 @is_enabled('corporate_memberships')
@@ -1724,8 +1771,8 @@ def delete_corp_rep(request, id,
                                         'corpmembership.edit_corp_reps',
                                         args=[corp_memb.pk]))
 
-        return render_to_response(template_name, {'corp_membership': corp_memb},
-            context_instance=RequestContext(request))
+        return render_to_resp(request=request, template_name=template_name,
+            context={'corp_membership': corp_memb})
     else:
         raise Http403
 
@@ -1734,16 +1781,18 @@ def delete_corp_rep(request, id,
 def index(request,
           template_name="corporate_memberships/applications/index.html"):
     corp_app = CorpMembershipApp.objects.current_app()
+    corp_membership_types = corp_app.corp_memb_type.all().order_by('position')
     EventLog.objects.log()
 
-    return render_to_response(template_name, {'corp_app': corp_app},
-        context_instance=RequestContext(request))
+    return render_to_resp(request=request, template_name=template_name,
+        context={'corp_app': corp_app,
+                               'corp_membership_types': corp_membership_types})
 
 
 @is_enabled('corporate_memberships')
 @staff_member_required
-def summary_report(request,
-                template_name='corporate_memberships/reports/summary.html'):
+def overview(request,
+                template_name='corporate_memberships/reports/overview.html'):
     """
     Shows a report of corporate memberships per corporate membership type.
     """
@@ -1755,10 +1804,10 @@ def summary_report(request,
 
     EventLog.objects.log()
 
-    return render_to_response(template_name, {
+    return render_to_resp(request=request, template_name=template_name, context={
         'summary': summary,
         'total': total,
-        }, context_instance=RequestContext(request))
+        })
 
 
 @is_enabled('corporate_memberships')
@@ -1778,9 +1827,9 @@ def new_over_time_report(request, template_name='reports/corp_mems_over_time.htm
 
     EventLog.objects.log()
 
-    return render_to_response(template_name, {
+    return render_to_resp(request=request, template_name=template_name, context={
         'stats':stats,
-        }, context_instance=RequestContext(request))
+        })
 
 
 @is_enabled('corporate_memberships')
@@ -1793,7 +1842,189 @@ def corp_mems_summary(request, template_name='reports/corp_mems_summary.html'):
 
     EventLog.objects.log()
 
-    return render_to_response(template_name, {
+    return render_to_resp(request=request, template_name=template_name, context={
         'summary':summary,
         'total':total,
-        }, context_instance=RequestContext(request))
+        })
+
+
+@is_enabled('corporate_memberships')
+@staff_member_required
+def report_active_corp_members_by_type(request,
+    template='corporate_memberships/reports/report_by_type.html'):
+    corp_mems = CorpMembership.objects.filter(
+                            status=True,
+                            status_detail='active')
+    form = ReportByTypeForm(request.GET)
+    if form.is_valid():
+        days = int(form.cleaned_data.get('days') or 0)
+        corp_membership_type = int(form.cleaned_data.get('corp_membership_type') or 0)
+    else:
+        days = 0
+        corp_membership_type = 0
+
+    if days:
+        compare_dt = datetime.now() - timedelta(days=days)
+        corp_mems = corp_mems.filter(join_dt__gte=compare_dt)
+    if corp_membership_type:
+        corp_mems = corp_mems.filter(corporate_membership_type=corp_membership_type)
+
+    allowed_sort_fields = {'corp_profile': 'corp_profile__name',
+                            'corporate_membership_type': 'corporate_membership_type__name',
+                            'parent_entity': 'corp_profile__parent_entity__entity_name',
+                            'join_dt': 'join_dt',}
+
+    sort = request.GET.get('sort', 'corp_profile__name')
+    decending = False
+    if sort[0] == '-':
+        sort = sort[1:]
+        decending = True
+
+    if sort not in allowed_sort_fields:
+        sort = 'corp_profile'
+
+    if decending:
+        order_by_field = '-' + allowed_sort_fields[sort]
+    else:
+        order_by_field =  allowed_sort_fields[sort]
+    corp_mems = corp_mems.order_by(order_by_field)
+
+    EventLog.objects.log()
+
+    # process csv download
+    ouput = request.GET.get('output', '')
+    if ouput == 'csv':
+
+        table_header = [
+            'company name',
+            'parent entity',
+            'type',
+            'join',
+            'member rep name',
+            'member rep email',
+            'invoice',]
+
+        table_data = []
+        for corp_mem in corp_mems:
+            corp_profile = corp_mem.corp_profile
+            invoice_pk = u''
+            if corp_mem.invoice:
+                invoice_pk = u'%i' % corp_mem.invoice.pk
+            member_rep = corp_profile.get_member_rep()
+            if member_rep:
+                member_rep_name = member_rep.user.get_full_name()
+                member_rep_email = member_rep.user.email
+            else:
+                member_rep_name = ''
+                member_rep_email = ''
+            table_data.append([
+                corp_profile.name,
+                corp_profile.parent_entity.entity_name,
+                corp_mem.corporate_membership_type.name,
+                corp_mem.join_dt,
+                member_rep_name,
+                member_rep_email,
+                invoice_pk,
+            ])
+
+        return render_csv(
+            'active-corporate-memberships.csv',
+            table_header,
+            table_data,
+        )
+
+    return render_to_resp(request=request, template_name=template,
+                  context={
+                   'corp_mems': corp_mems,
+                   'active': True,
+                   'days': days,
+                   'form': form,
+                   })
+
+
+@is_enabled('corporate_memberships')
+@staff_member_required
+def report_corp_members_by_status(request,
+    template='corporate_memberships/reports/report_by_status.html'):
+    corp_mems = CorpMembership.objects.filter(
+                            status=True,).exclude(
+                            status_detail='archive')
+    form = ReportByStatusForm(request.GET)
+    if form.is_valid():
+        days = int(form.cleaned_data.get('days') or 0)
+        status_detail = form.cleaned_data.get('status_detail')
+    else:
+        days = 0
+        status_detail = ''
+
+    if days:
+        compare_dt = datetime.now() - timedelta(days=days)
+        corp_mems = corp_mems.filter(join_dt__gte=compare_dt)
+    if status_detail:
+        corp_mems = corp_mems.filter(status_detail=status_detail)
+
+    allowed_sort_fields = {'corp_profile': 'corp_profile__name',
+                            'status_detail': 'status_detail',
+                            'join_dt': 'join_dt',
+                            'expiration_dt': 'expiration_dt',}
+
+    sort = request.GET.get('sort', 'corp_profile__name')
+    decending = False
+    if sort[0] == '-':
+        sort = sort[1:]
+        decending = True
+
+    if sort not in allowed_sort_fields:
+        sort = 'corp_profile'
+
+    if decending:
+        order_by_field = '-' + allowed_sort_fields[sort]
+    else:
+        order_by_field =  allowed_sort_fields[sort]
+    corp_mems = corp_mems.order_by(order_by_field)
+
+    EventLog.objects.log()
+
+    # process csv download
+    ouput = request.GET.get('output', '')
+    if ouput == 'csv':
+
+        table_header = [
+            'company name',
+            'status',
+            'join',
+            'expiration',
+            'dues rep name',
+            'dues rep email',]
+
+        table_data = []
+        for corp_mem in corp_mems:
+            corp_profile = corp_mem.corp_profile
+            dues_rep = corp_profile.get_dues_rep()
+            if dues_rep:
+                dues_rep_name = dues_rep.user.get_full_name()
+                dues_rep_email = dues_rep.user.email
+            else:
+                dues_rep_name = ''
+                dues_rep_email = ''
+            table_data.append([
+                corp_profile.name,
+                corp_mem.status_detail,
+                corp_mem.join_dt,
+                corp_mem.expiration_dt,
+                dues_rep_name,
+                dues_rep_email,
+            ])
+
+        return render_csv(
+            'corporate-memberships-by-status.csv',
+            table_header,
+            table_data,
+        )
+
+    return render_to_resp(request=request, template_name=template,
+                  context={
+                   'corp_mems': corp_mems,
+                   'days': days,
+                   'form': form,
+                   })

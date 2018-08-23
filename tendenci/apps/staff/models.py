@@ -2,6 +2,7 @@ import re
 from datetime import datetime
 
 from django.db import models
+from django.urls import reverse
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.contenttypes.fields import GenericRelation
 
@@ -25,7 +26,7 @@ def file_directory(instance, filename):
 class Staff(OrderingBaseModel, TendenciBaseModel):
     name = models.CharField(max_length=50)
     slug = models.SlugField(max_length=75, unique=True)
-    department = models.ForeignKey('Department', blank=True, null=True)
+    department = models.ForeignKey('Department', blank=True, null=True, on_delete=models.SET_NULL)
     positions = models.ManyToManyField('Position', blank=True)
     biography = models.TextField(blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
@@ -46,7 +47,7 @@ class Staff(OrderingBaseModel, TendenciBaseModel):
 
     objects = StaffManager()
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
     class Meta:
@@ -68,9 +69,8 @@ class Staff(OrderingBaseModel, TendenciBaseModel):
 
         return super(Staff, self).save(*args, **kwargs)
 
-    @models.permalink
     def get_absolute_url(self):
-        return ("staff.view", [self.slug])
+        return reverse('staff.view', args=[self.slug])
 
     def years(self):
         delta = datetime.now().date() - self.start_date
@@ -90,12 +90,11 @@ class Department(models.Model):
     class Meta:
         app_label = 'staff'
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
-    @models.permalink
     def get_absolute_url(self):
-        return ("staff.department_view", [self.slug])
+        return reverse('staff.department_view', args=[self.slug])
 
 
 class Position(models.Model):
@@ -104,7 +103,7 @@ class Position(models.Model):
     class Meta:
         app_label = 'staff'
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
 
@@ -118,7 +117,7 @@ class StaffFile(OrderingBaseModel, File):
         (PHOTO_TYPE_OTHER, 'Other'),
     )
 
-    staff = models.ForeignKey(Staff)
+    staff = models.ForeignKey(Staff, on_delete=models.CASCADE)
     photo_type = models.CharField(
         max_length=50,
         choices=PHOTO_TYPE_CHOICES

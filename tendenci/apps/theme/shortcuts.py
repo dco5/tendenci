@@ -1,87 +1,8 @@
-import re
-from django.template import TemplateDoesNotExist, Context
-from django.template import Engine
-engine = Engine.get_default()
-find_template = engine.find_template
-find_template_loader = engine.find_template_loader
-get_template_from_string = engine.from_string
-select_template = engine.select_template
-make_origin = engine.make_origin
 from django.http import HttpResponse
-from django.conf import settings
-from tendenci.apps.theme.utils import get_theme_template, get_theme_root
-from tendenci.apps.site_settings.utils import get_setting
-
-non_theme_source_loaders = None
+from django.template.loader import get_template, select_template
 
 
-def find_default_template(name, dirs=None):
-    """
-    Exclude the theme.template_loader
-    So we can properly get the templates not part of any theme.
-    """
-    # Calculate template_source_loaders the first time the function is executed
-    # because putting this logic in the module-level namespace may cause
-    # circular import errors. See Django ticket #1292.
-
-    global non_theme_source_loaders
-    if non_theme_source_loaders is None:
-        loaders = []
-        for loader_name in settings.TEMPLATE_LOADERS:
-            if loader_name != 'theme.template_loaders.load_template_source':
-                loader = find_template_loader(loader_name)
-                if loader is not None:
-                    loaders.append(loader)
-        non_theme_source_loaders = tuple(loaders)
-    for loader in non_theme_source_loaders[-1:]:
-        try:
-            source, display_name = loader(name, dirs)
-            return (source, make_origin(display_name, loader, name, dirs))
-        except TemplateDoesNotExist:
-            pass
-    raise TemplateDoesNotExist(name)
-
-
-def get_default_template(template_name):
-    """
-    Returns a compiled Template object for the given template name,
-    handling template inheritance recursively.
-    """
-    template, origin = find_default_template(template_name)
-
-    if not hasattr(template, 'render'):
-        # template needs to be compiled
-        template = get_template_from_string(template, origin, template_name)
-    return template
-
-
-def get_template(template_name):
-    """
-    Returns a compiled Template object for the given template name,
-    handling template inheritance recursively.
-    Copy from django.template.loader modified to return "origin."
-    """
-    template, origin = find_template(template_name)
-    if not hasattr(template, 'render'):
-        # template needs to be compiled
-        template = get_template_from_string(template, origin, template_name)
-    return template, origin
-
-
-def themed_response(*args, **kwargs):
-    """Returns a HttpResponse whose content is filled with the result of calling
-    django.template.loader.render_to_string() with the passed arguments.
-    """
-    if 'content_type' in kwargs:
-        content_type = kwargs.pop('content_type')
-    elif 'mimetype' in kwargs:
-        content_type = kwargs.pop('mimetype')
-    else:
-        content_type = None
-    return HttpResponse(render_to_theme(*args, **kwargs), content_type=content_type)
-
-
-def strip_content_above_doctype(html):
+def _strip_content_above_doctype(html):
     """Strips any content above the doctype declaration out of the
     resulting template. If no doctype declaration, it returns the input.
 
@@ -97,43 +18,29 @@ def strip_content_above_doctype(html):
 
     return html
 
-def render_to_theme(template_name, dictionary={}, context_instance=Context):
-    """Loads the given template_name and renders it with the given dictionary as
-    context. The template_name may be a string to load a single template using
-    get_template, or it may be a tuple to use select_template to find one of
-    the templates in the list. Returns a string.
-    This shorcut prepends the template_name given with the selected theme's
-    directory
+
+# Render a response with some context about the top-level template, and with any
+# content above the doctype declaration removed.
+# Note that context_processors have no access to the template itself, so a
+# context_processor cannot be used to add this template-related context.
+def themed_response(request, template_name, context={}, content_type=None, status=None, using=None):
+    """
+    This is a direct replacement for django.shortcuts.render() which should be
+    used in all views by replacing:
+    from django.shortcuts import render as render_to_resp
+    With:
+    from tendenci.apps.theme.shortcuts import themed_response as render_to_resp
     """
 
-    context_instance.update(dictionary)
-    toggle = 'TOGGLE_TEMPLATE' in context_instance
-    #theme = context_instance['THEME']
-    theme = get_setting('module', 'theme_editor', 'theme')
-    theme_template = get_theme_template(template_name, theme=theme)
-    context_instance["THEME_TEMPLATE"] = template_name
-    context_instance["CUSTOM_TEMPLATE"] = False
-
-    if toggle:
-        t = get_default_template(template_name)
+    if isinstance(template_name, (list, tuple)):
+        template = select_template(template_name, using=using)
     else:
-        if isinstance(template_name, (list, tuple)):
-            try:
-                t = select_template(theme_template)
-            except TemplateDoesNotExist:
-                t = get_default_template(template_name)
-                context_instance["CUSTOM_TEMPLATE"] = False
-        else:
-            try:
-                t, origin = get_template(theme_template)
-                if origin and re.search("^%s.+" % get_theme_root(), origin.name):
-                    context_instance["CUSTOM_TEMPLATE"] = True
+        template = get_template(template_name, using=using)
 
-                if 'homepage.html' in template_name:
-                    context_instance["CUSTOM_TEMPLATE"] = False
+    context['TEMPLATE_NAME'] = template.origin.template_name
+    context['TEMPLATE_THEME'] = getattr(template.origin, 'theme', None)
 
-            except TemplateDoesNotExist:
-                t = get_default_template(template_name)
-                context_instance["CUSTOM_TEMPLATE"] = False
+    rendered = template.render(context=context, request=request)
+    rendered = _strip_content_above_doctype(rendered)
 
-    return strip_content_above_doctype(t.render(context_instance))
+    return HttpResponse(rendered, content_type=content_type, status=status)

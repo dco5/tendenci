@@ -1,14 +1,14 @@
 from tendenci.apps.registry.sites import site
-from tendenci.apps.registry.base import CoreRegistry, lazy_reverse
+from tendenci.apps.registry.base import CoreRegistry
 from tendenci.apps.industries.models import Industry
 
 
 class IndustryRegistry(CoreRegistry):
     version = '1.0'
-    author = 'Schipul - The Web Marketing Company'
-    author_email = 'programmers@schipul.com'
+    author = 'Tendenci - The Open Source AMS for Associations'
+    author_email = 'programmers@tendenci.com'
     description = 'A list of industries'
-    #icon = '%simages/icons/industries-color-64x64.png' % settings.STATIC_URL
+    #icon = static('images/icons/industries-color-64x64.png')
 
     event_logs = {
         'industry': {

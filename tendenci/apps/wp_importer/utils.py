@@ -1,8 +1,9 @@
+from builtins import str
 import os
-import urllib2
 import uuid
 import re
-from urlparse import urlparse
+from six.moves.urllib.parse import urlparse
+from six.moves.urllib.request import urlopen
 
 from tendenci.apps.pages.models import Page
 from tendenci.apps.articles.models import Article
@@ -17,11 +18,11 @@ def replace_short_code(body):
     Replaces shortcodes in the body of an article with appropriate HTML structures.
     """
     # remove CDATA elements
-    body = re.sub("^<!\\[CDATA\\[", "", body)
-    body = re.sub("\\]\\]>$", "", body)
+    body = re.sub(r'^<!\[CDATA\[', '', body)
+    body = re.sub(r'\]\]>$', '', body)
 
-    body = re.sub("(.*)(\\[caption.*caption=\")(.*)(\"\\])(.*)(<img.*(\"|/| )>)(.*)(\\[/caption\\])(.*)", "\\1\\6<div class=\"caption\">\\3</div>\\10", body)
-    body = re.sub("(.*)(\\[gallery?.*?\\])(.*)", '', body)
+    body = re.sub(r'(.*)(\[caption.*caption=")(.*)("\])(.*)(<img.*("|/| )>)(.*)(\[/caption\])(.*)', r'\1\6<div class="caption">\3</div>\10', body)
+    body = re.sub(r'(.*)(\[gallery?.*?\])(.*)', '', body)
     return body
 
 def get_posts(item, user):
@@ -32,11 +33,11 @@ def get_posts(item, user):
     alreadyThere = False
 
     if item.find('link'):
-        link = unicode(item.find('link').contents[0])
+        link = str(item.find('link').contents[0])
         slug = urlparse(link).path.strip('/')
     else:
         # if no slug, grab the post id
-        slug = unicode(item.find('wp:post_id').contents[0])
+        slug = str(item.find('wp:post_id').contents[0])
 
     for article in Article.objects.all():
         if article.slug == slug[:100]:
@@ -44,10 +45,10 @@ def get_posts(item, user):
             break
 
     if not alreadyThere:
-        title = unicode(item.find('title').contents[0])
+        title = str(item.find('title').contents[0])
         post_id = item.find('wp:post_id').string
         post_id = int(post_id)
-        body = unicode(item.find('content:encoded').contents[0])
+        body = str(item.find('content:encoded').contents[0])
         body = replace_short_code(body)
 
         try:
@@ -60,11 +61,11 @@ def get_posts(item, user):
         except:
             pass
 
-        post_date = unicode(item.find('wp:post_date').contents[0])
+        post_date = str(item.find('wp:post_date').contents[0])
         #post_dt = datetime.strptime(post_date, '%Y-%m-%d %H:%M:%S')
         post_dt = post_date
 
-        tags_raw = item.findAll('category', domain="post_tag")
+        tags_raw = item.find_all('category', domain="post_tag")
         tags_list = []
 
         if tags_raw:
@@ -74,7 +75,7 @@ def get_posts(item, user):
 
         article = {
             'headline': title,
-            'guid': str(uuid.uuid1()),
+            'guid': str(uuid.uuid4()),
             'slug': slug[:100],
             'body': body,
             'tags': ','.join(tags_list),
@@ -112,7 +113,7 @@ def get_pages(item, user):
     If not, create Page object.
     """
     alreadyThere = False
-    link = unicode(item.find('link').contents[0])
+    link = str(item.find('link').contents[0])
     slug = urlparse(link).path.strip('/')
 
     for page in Page.objects.all():
@@ -121,10 +122,10 @@ def get_pages(item, user):
             break
 
     if not alreadyThere:
-        title = unicode(item.find('title').contents[0])
+        title = str(item.find('title').contents[0])
         post_id = item.find('wp:post_id').string
         post_id = int(post_id)
-        body = unicode(item.find('content:encoded').contents[0])
+        body = str(item.find('content:encoded').contents[0])
         body = replace_short_code(body)
         try:
             fgroup = AssociatedFile.objects.filter(post_id=post_id)
@@ -136,7 +137,7 @@ def get_pages(item, user):
 
         page = {
             'title': title,
-            'guid': str(uuid.uuid1()),
+            'guid': str(uuid.uuid4()),
             'slug': slug[:100],
             'content': body,
             #'timezone': 'US/Central',
@@ -184,13 +185,13 @@ def get_media(item, user):
             break
 
     if not alreadyThere:
-        source = urllib2.urlopen(media_url_in_attachment).read()
+        source = urlopen(media_url_in_attachment).read()
 
         with open(media_url, 'wb') as f:
             f.write(source)
             file_path = f.name
 
-        new_media = File(guid=unicode(uuid.uuid1()), file=file_path, creator=user, owner=user)
+        new_media = File(guid=str(uuid.uuid4()), file=file_path, creator=user, owner=user)
         new_media.save()
 
     temporary = AssociatedFile(post_id=post_id, file=new_media)
@@ -201,15 +202,15 @@ def correct_media_file_path(body, file):
     """
     Replace an instance of the given file's URL in the given HTML with a file path.
     """
-    match = re.search("(.*)(http://.*\\/?\\/\\b\\w+\\/)((\\S+)(\\-\\d+x.*?\\S*.*)|(\\S+.*?\\S+))(\\.\\S+)(\\\".*)", body)
+    match = re.search(r'(.*)(http://.*/?/\b\w+/)((\S+)(-\d+x.*?\S*.*)|(\S+.*?\S+))(\.\S+)(".*)', body)
     if match:
         match.group()
 
         if match.group(4) is None and file.basename() == match.group(6) + match.group(7):
             # if the file is unsized
-            body = re.sub("(.*)(http://.*\\/?\\/\\b\\w+\\/)(" + re.escape(file.basename()) + ".*?)(\\\".*)", "\\1/files/" + str(file.pk) + "/\\4", body)
+            body = re.sub(r'(.*)(http://.*/?/\b\w+/)(' + re.escape(file.basename()) + r'.*?)(".*)', r'\1/files/' + str(file.pk) + r'/\4', body)
         elif match.group(6) is None and file.basename() == match.group(4) + match.group(7):
             # if the file is sized
-            body = re.sub("(.*)(http://.*\\/?\\/\\b\\S+\\/)(" + re.escape(match.group(4) + match.group(5) + match.group(7)) + ".*?)(\\\".*)", "\\1/files/" + str(file.pk) + "/\\4", body)
+            body = re.sub(r'(.*)(http://.*/?/\b\S+/)(' + re.escape(match.group(4) + match.group(5) + match.group(7)) + r'.*?)(".*)', r'\1/files/' + str(file.pk) + r'/\4', body)
 
     return body

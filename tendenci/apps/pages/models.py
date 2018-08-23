@@ -1,9 +1,9 @@
 import uuid
 
 from django.db import models
+from django.urls import reverse
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.contenttypes.fields import GenericRelation
-from django.core.urlresolvers import reverse
 
 from tagging.fields import TagField
 from tendenci.libs.tinymce import models as tinymce_models
@@ -21,18 +21,24 @@ from tendenci.apps.user_groups.models import Group
 from tendenci.libs.boto_s3.utils import set_s3_file_permission
 
 
+class HeaderImage(File):
+    class Meta:
+        app_label = 'pages'
+        manager_inheritance_from_future = True
+
+
 class BasePage(TendenciBaseModel):
     guid = models.CharField(max_length=40)
     title = models.CharField(max_length=500, blank=True)
     slug = SlugField(_('URL Path'))
-    header_image = models.ForeignKey('HeaderImage', null=True)
+    header_image = models.ForeignKey(HeaderImage, null=True, on_delete=models.SET_NULL)
     content = tinymce_models.HTMLField()
     view_contact_form = models.BooleanField(default=False)
     design_notes = models.TextField(_('Design Notes'), blank=True)
     syndicate = models.BooleanField(_('Include in RSS feed'), default=False)
     template = models.CharField(_('Template'), max_length=50, blank=True)
     tags = TagField(blank=True)
-    meta = models.OneToOneField(MetaTags, null=True)
+    meta = models.OneToOneField(MetaTags, null=True, on_delete=models.SET_NULL)
     categories = GenericRelation(CategoryItem,
         object_id_field="object_id", content_type_field="content_type")
 
@@ -42,7 +48,7 @@ class BasePage(TendenciBaseModel):
 
     def save(self, *args, **kwargs):
         if not self.guid:
-            self.guid = str(uuid.uuid1())
+            self.guid = str(uuid.uuid4())
         super(BasePage, self).save(*args, **kwargs)
         if self.header_image:
             if self.is_public():
@@ -50,7 +56,7 @@ class BasePage(TendenciBaseModel):
             else:
                 set_s3_file_permission(self.header_image.file, public=False)
 
-    def __unicode__(self):
+    def __str__(self):
         return self.title
 
     def get_header_image_url(self):
@@ -70,7 +76,7 @@ class BasePage(TendenciBaseModel):
     @property
     def category_set(self):
         items = {}
-        for cat in self.categories.select_related('category__name', 'parent__name'):
+        for cat in self.categories.select_related('category', 'parent'):
             if cat.category:
                 items["category"] = cat.category
             elif cat.parent:
@@ -92,7 +98,7 @@ class Page(BasePage):
     CONTRIBUTOR_CHOICES = ((CONTRIBUTOR_AUTHOR, _('Author')),
                            (CONTRIBUTOR_PUBLISHER, _('Publisher')))
 
-    group = models.ForeignKey(Group, null=True, default=get_default_group)
+    group = models.ForeignKey(Group, null=True, default=get_default_group, on_delete=models.SET_NULL)
     contributor_type = models.IntegerField(choices=CONTRIBUTOR_CHOICES,
                                            default=CONTRIBUTOR_AUTHOR)
     google_profile = models.URLField(_('Google+ URL'), blank=True)
@@ -113,13 +119,11 @@ class Page(BasePage):
         """
         return PageMeta().get_meta(self, name)
 
-    @models.permalink
     def get_absolute_url(self):
-        return ("page", [self.slug])
+        return reverse('page', args=[self.slug])
 
-    @models.permalink
     def get_version_url(self, hash):
-        return ("page.version", [hash])
+        return reverse('page.version', args=[hash])
 
     @property
     def has_google_author(self):
@@ -128,10 +132,3 @@ class Page(BasePage):
     @property
     def has_google_publisher(self):
         return self.contributor_type == self.CONTRIBUTOR_PUBLISHER
-
-
-class HeaderImage(File):
-    pass
-
-    class Meta:
-        app_label = 'pages'

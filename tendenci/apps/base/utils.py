@@ -1,28 +1,30 @@
 from __future__ import print_function
+from builtins import object, str
 import os
 import re
-from datetime import datetime
-from datetime import timedelta
+from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 from decimal import Decimal
 import codecs
-import cStringIO
 import csv
-from urlparse import urlparse
 import hashlib
 import hmac
 import base64
-import urllib2
+from six.moves.urllib.request import Request, build_opener
+from six.moves.urllib.parse import urlparse
+import pytz
 import socket
 from PIL import Image
-from StringIO import StringIO
+from io import BytesIO, StringIO
 import requests
-from pdfminer.pdfinterp import PDFResourceManager, process_pdf
-from pdfminer.converter import TextConverter
-from pdfminer.layout import LAParams
+from pdfminer.pdfparser import PDFParser
+from pdfminer.pdfdocument import PDFDocument
+from pdfminer.pdfpage import PDFPage
+from pdfminer.pdfinterp import PDFResourceManager, PDFPageInterpreter
+from pdfminer.converter import PDFPageAggregator
+from pdfminer.layout import LAParams, LTTextBox, LTTextLine
 from PIL import Image as pil
 from PIL import ImageFile
-ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 from django.conf import settings
 from django.utils import translation
@@ -33,23 +35,25 @@ from django.contrib.humanize.templatetags.humanize import intcomma
 from django.template.loader import get_template
 from django.template import TemplateDoesNotExist
 from django.contrib.admin.utils import NestedObjects
-from django.utils.functional import allow_lazy
+from django.utils.functional import keep_lazy_text
 from django.utils.text import capfirst, Truncator
-from django.utils.encoding import force_unicode
+from django.utils.encoding import smart_str
 from django.db import router
 from django.utils.encoding import force_text
 from django.contrib.auth import get_permission_codename
-from django.utils.html import format_html
+from django.utils.html import format_html, strip_tags
 from django.utils.translation import ugettext as _
+from django.core.validators import EmailValidator
 
 from django.utils.functional import Promise
 from django.core.serializers.json import DjangoJSONEncoder
 
 from simple_salesforce import Salesforce
 
-from tendenci.apps.base.models import ChecklistItem
 from tendenci.apps.site_settings.utils import get_setting
 from tendenci.apps.theme.utils import get_theme_root
+
+ImageFile.LOAD_TRUNCATED_IMAGES = True
 
 STOP_WORDS = ['able','about','across','after','all','almost','also','am',
               'among','an','and','any','are','as','at','be','because',
@@ -67,12 +71,22 @@ STOP_WORDS = ['able','about','across','after','all','almost','also','am',
               'find','very','still','non','here', 'many', 'a','s','t','ve',
               'use', 'don\'t', 'can\'t', 'wont', 'come','you\'ll', 'want']
 
-template_directory = "templates"
-THEME_ROOT = get_theme_root()
+
+ORIENTATION_EXIF_TAG_KEY = 274
+
+
+def is_valid_domain(email_domain):
+    """
+    Check if it's a valid email domain.
+    """
+    if '@' in email_domain:
+        email_domain = email_domain.rsplit('@', 1)[1]
+    return EmailValidator().validate_domain_part(email_domain)
+
 
 def google_cmap_sign_url(url):
     """ Signs a URL and returns the URL with digital signature for Google static maps API.
-    
+
     For the detailed guides to generating a digital signature, go to:
     https://developers.google.com/maps/documentation/static-maps/get-api-key#digital-signature
     """
@@ -82,30 +96,30 @@ def google_cmap_sign_url(url):
     signing_secret = settings.GOOGLE_SMAPS_URL_SIGNING_SECRET
     if not signing_secret:
         return url
-    
+
     url_parts = urlparse(url)
     if not url_parts.query:
         return url
-    
+
     # don't sign if api key is not provided
-    if 'key' not in dict(map(lambda x:x.split('='), url_parts.query.split('&'))):
+    if 'key' not in dict([x.split('=') for x in url_parts.query.split('&')]):
         return url
-    
+
     # strip off the domain portion of the request, leaving only the path and the query
     url_parts_to_sign = url_parts.path + "?" + url_parts.query
-    
+
     # retrieve the URL signing secret by decoding it - it is encoded in a modified Base64
-    decoded_signing_secret = base64.urlsafe_b64decode(signing_secret)
-    
+    decoded_signing_secret = base64.urlsafe_b64decode(signing_secret.encode())
+
     # sign it  using the HMAC-SHA1 algorithm
-    signature = hmac.new(decoded_signing_secret, url_parts_to_sign, hashlib.sha1)
-    
-    # encode the resulting binary signature using the modified Base64 for URLs 
+    signature = hmac.new(decoded_signing_secret, url_parts_to_sign.encode(), hashlib.sha1)
+
+    # encode the resulting binary signature using the modified Base64 for URLs
     # to convert this signature into something that can be passed within a URL
     encoded_signature = base64.urlsafe_b64encode(signature.digest())
-    
+
     # append digital signature
-    return url + "&signature=" + encoded_signature
+    return url + "&signature=" + encoded_signature.decode()
 
 
 class LazyEncoder(DjangoJSONEncoder):
@@ -114,8 +128,9 @@ class LazyEncoder(DjangoJSONEncoder):
     """
     def default(self, obj):
         if isinstance(obj, Promise):
-            return force_unicode(obj)
+            return force_text(obj)
         return super(LazyEncoder, self).default(obj)
+
 
 def get_languages_with_local_name():
     """
@@ -171,21 +186,27 @@ def get_deleted_objects(objs, user):
     return to_delete, collector.model_count, perms_needed, protected
 
 
-# this function is not necessary - datetime.now() *is* localized in django
-def now_localized():
-    from timezones.utils import adjust_datetime_to_timezone
-    from time import strftime, gmtime
+def get_timezone_choices():
+    choices = []
+    for tz in pytz.common_timezones:
+        ofs = datetime.now(pytz.timezone(tz)).strftime("%z")
+        choices.append((int(ofs), tz, "(GMT%s) %s" % (ofs, tz)))
+    choices.sort()
+    return [t[1:] for t in choices]
 
-    os_timezone = strftime('%Z',gmtime())
-    if os_timezone == 'CST': os_timezone = 'US/Central'
-    django_timezone =  settings.TIME_ZONE
 
-    now = adjust_datetime_to_timezone(
-               datetime.now(),
-               from_tz=os_timezone,
-               to_tz=django_timezone)
-    now = now.replace(tzinfo=None)
-    return now
+def adjust_datetime_to_timezone(value, from_tz, to_tz=None):
+    """
+    Given a ``datetime`` object, adjust it according to the from_tz timezone
+    string into the to_tz timezone string.
+    """
+    if to_tz is None:
+        to_tz = settings.TIME_ZONE
+    if value.tzinfo is None:
+        if not hasattr(from_tz, "localize"):
+            from_tz = pytz.timezone(smart_str(from_tz))
+        value = from_tz.localize(value)
+    return value.astimezone(pytz.timezone(smart_str(to_tz)))
 
 
 def localize_date(date, from_tz=None, to_tz=None):
@@ -195,7 +216,6 @@ def localize_date(date, from_tz=None, to_tz=None):
 
         localize_date(date, from_tz, to_tz=None)
     """
-    from timezones.utils import adjust_datetime_to_timezone
 
     # set the defaults
     if from_tz is None:
@@ -219,7 +239,7 @@ def tcurrency(mymoney):
     if not currency_symbol:
         currency_symbol = "$"
 
-    if not isinstance(mymoney, basestring):
+    if not isinstance(mymoney, str):
         if mymoney >= 0:
             fmt = '%s%s'
         else:
@@ -297,7 +317,7 @@ def get_unique_username(user):
         if user.first_name and user.last_name:
             user.username = '%s%s' % (user.first_name[0], user.last_name)
     if not user.username:
-        user.username = str(uuid.uuid1())[:7]
+        user.username = str(uuid.uuid4())[:7]
     if len(user.username) > 20:
         user.username = user.username[:7]
 
@@ -339,7 +359,6 @@ def generate_meta_keywords(value):
         from re import compile
         from operator import itemgetter
 
-        from django.utils.html import strip_tags
         from django.utils.text import unescape_entities
         from django.utils.translation import ugettext_lazy as _
 
@@ -439,6 +458,7 @@ def generate_meta_keywords(value):
     except AttributeError:
         return ''
 
+
 def filelog(*args, **kwargs):
     """
         Will generate a file with output to the
@@ -450,7 +470,7 @@ def filelog(*args, **kwargs):
     if 'path' in kwargs:
         path = kwargs['path']
     else:
-        path = getattr(settings,'PROJECT_ROOT','/var/log')
+        path = settings.PROJECT_ROOT
 
     if 'filename' in kwargs:
         filename = kwargs['filename']
@@ -466,6 +486,7 @@ def filelog(*args, **kwargs):
     for arg in args:
         f.write(arg)
     f.close()
+
 
 class FormDateTimes(object):
     """
@@ -496,12 +517,13 @@ class FormDateTimes(object):
 
         # set the end time to an hour ahead
         self.end_dt = self.start_dt + timedelta(hours=1)
-
 date_times = FormDateTimes()
+
 
 def enc_pass(password):
     from base64 import urlsafe_b64encode
-    return ''.join(list(reversed(urlsafe_b64encode(password))))
+    return ''.join(list(reversed(urlsafe_b64encode(password.encode()).decode())))
+
 
 def dec_pass(password):
     from base64 import urlsafe_b64decode
@@ -509,7 +531,8 @@ def dec_pass(password):
     pw_list = list(str(password))
     pw_list.reverse()
 
-    return urlsafe_b64decode(''.join(pw_list))
+    return urlsafe_b64decode(''.join(pw_list).encode()).decode()
+
 
 def url_exists(url):
     o = urlparse(url)
@@ -523,9 +546,10 @@ def url_exists(url):
 
 
 def parse_image_sources(string):
-    p = re.compile('<img[^>]* src=\"([^\"]*)\"[^>]*>')
+    p = re.compile(r'<img[^>]* src=\"([^\"]*)\"[^>]*>')
     image_sources = re.findall(p, string)
     return image_sources
+
 
 def make_image_object_from_url(image_url):
     # parse url
@@ -535,19 +559,54 @@ def make_image_object_from_url(image_url):
     if not parsed_url.scheme:
         image_url = '%s%s' %  (get_setting('site', 'global', 'siteurl'), image_url)
 
-    request = urllib2.Request(image_url)
+    request = Request(image_url)
     request.add_header('User-Agent', settings.TENDENCI_USER_AGENT)
-    opener = urllib2.build_opener()
+    opener = build_opener()
 
     # make image object
     try:
         socket.setdefaulttimeout(1.5)
         data = opener.open(request).read() # get data
-        im = Image.open(StringIO(data))
+        im = Image.open(BytesIO(data))
     except:
         im = None
     return im
 
+
+def apply_orientation(im):
+    """
+    Some photos are taken with camera rotated. The rotated info is stored in the EXIF metadata.
+    But EXIF metadata gets lost when an image is cropped or modified, which can lead to unintended
+    position.
+
+    Extract the orientation info and apply the rotation if needed (before cropping or modifying an image).
+
+    Parameters
+    -----------
+    im : Image
+        An Image instance
+    
+    Returns
+    -------
+    Image 
+        A rotated or original image instance
+    """
+
+    try:
+        if hasattr(im, '_getexif'): # only present in JPEGs
+            image_exif = im._getexif()       # returns None if no EXIF data
+            if image_exif is not None:
+                image_orientation = image_exif.get(ORIENTATION_EXIF_TAG_KEY)
+                if image_orientation:
+                    if image_orientation == 3:
+                        return im.rotate(180)
+                    if image_orientation == 6:
+                        return im.rotate(-90)
+                    if image_orientation == 8:
+                        return im.rotate(90)
+    except:
+        pass 
+    return im
 
 def image_rescale(img, size, force=True):
     """Rescale the given image, optionally cropping it to make sure the result image has the specified width and height."""
@@ -578,6 +637,7 @@ def image_rescale(img, size, force=True):
     img.format = format  # add format back
     return img
 
+
 def in_group(user, group):
     """
         Tells you if a user is in a particular group
@@ -593,7 +653,7 @@ def detect_template_tags(string):
         template tags in the system
         returns boolean
     """
-    p = re.compile('{[#{%][^#}%]+[%}#]}', re.IGNORECASE)
+    p = re.compile(r'{[#{%][^#}%]+[%}#]}', re.IGNORECASE)
     return p.search(string)
 
 
@@ -603,21 +663,16 @@ def get_template_list():
     directory that begin with 'default-'
     """
     file_list = []
-    theme = get_setting('module', 'theme_editor', 'theme')
-    if hasattr(settings, 'USE_S3_STORAGE') and settings.USE_S3_STORAGE:
-        theme_dir = settings.ORIGINAL_THEMES_DIR
-    else:
-        theme_dir = settings.THEMES_DIR
+    theme_dir = get_theme_root()
+    template_dir = os.path.join(theme_dir, 'templates')
 
-    current_dir = os.path.join(theme_dir, theme, template_directory)
-
-    if os.path.isdir(current_dir):
-        item_list = os.listdir(current_dir)
+    if os.path.isdir(template_dir):
+        item_list = os.listdir(template_dir)
     else:
         item_list = []
 
     for item in item_list:
-        current_item = os.path.join(current_dir, item)
+        current_item = os.path.join(template_dir, item)
         path_split = os.path.splitext(current_item)
         extension = path_split[1]
         base_name = os.path.basename(path_split[0])
@@ -628,22 +683,16 @@ def get_template_list():
     return sorted(file_list)
 
 
-def check_template(filename):
-    """
-    Check to see if the file exists in the theme root
-    """
-    current_file = os.path.join(settings.ORIGINAL_THEMES_DIR, THEME_ROOT, template_directory, filename)
-    return os.path.isfile(current_file)
-
 def template_exists(template):
     """
     Check if the template exists
     """
     try:
         get_template(template)
-    except TemplateDoesNotExist:
+    except (TemplateDoesNotExist, IOError):
         return False
     return True
+
 
 def fieldify(s):
     """Convert the fields in the square brackets to the django field type.
@@ -652,12 +701,26 @@ def fieldify(s):
                     will be converted to
                 "{{ first_name }}: Lisa"
     """
-    #p = re.compile('(\[([\w\d\s_-]+)\])')
-    p = re.compile('(\[(.*?)\])')
+    #p = re.compile(r'(\[([\w\d\s_-]+)\])')
+    p = re.compile(r'(\[(.*?)\])')
     return p.sub(slugify_fields, s)
+
 
 def slugify_fields(match):
     return '{{ %s }}' % (slugify(match.group(2))).replace('-', '_')
+
+
+entities_re = re.compile(r'&(?:\w+|#\d+);')
+@keep_lazy_text
+def strip_entities(value):
+    """Returns the given HTML with all entities (&something;) stripped."""
+    # This was copied from Django 1.9 since it is removed in Django 1.10
+    return entities_re.sub('', force_text(value))
+
+
+def strip_html(value):
+    """Returns the given HTML with all tags and entities stripped."""
+    return strip_entities(strip_tags(value))
 
 
 def convert_absolute_urls(content, base_url):
@@ -675,10 +738,10 @@ def is_blank(item):
     Check if values inside dictionary are blank.
     """
     if isinstance(item, dict):
-        l = item.values()
+        l = list(item.values())
     elif isinstance(item, list):
         l = item
-    elif isinstance(item, basestring):
+    elif isinstance(item, str):
         l = list(item)
 
     item = []
@@ -696,7 +759,7 @@ def normalize_newline(file_path):
 
     ```file_path``` is a relative path.
     """
-    data = default_storage.open(file_path).read()
+    data = default_storage.open(file_path).read().decode('utf-8')
     data = data.replace('\r\n', '\n').replace('\r', '\n')
     f = default_storage.open(file_path, 'w')
     f.write(data)
@@ -711,7 +774,7 @@ def get_pagination_page_range(num_pages, max_num_in_group=10,
     """
     if num_pages > start_num:
         # first group
-        page_range = range(1, max_num_in_group + 1)
+        page_range = list(range(1, max_num_in_group + 1))
         # middle group
         i = curr_page - int(max_num_in_group / 2)
         if i <= max_num_in_group:
@@ -721,18 +784,18 @@ def get_pagination_page_range(num_pages, max_num_in_group=10,
         j = i + max_num_in_group
         if j > num_pages - max_num_in_group:
             j = num_pages - max_num_in_group
-        page_range.extend(range(i, j))
+        page_range.extend(list(range(i, j)))
         if j < num_pages - max_num_in_group:
             page_range.extend(['...'])
         # last group
-        page_range.extend(range(num_pages - max_num_in_group,
-                                num_pages + 1))
+        page_range.extend(list(range(num_pages - max_num_in_group,
+                                     num_pages + 1)))
     else:
-        page_range = range(1, num_pages + 1)
+        page_range = list(range(1, num_pages + 1))
     return page_range
 
 
-class UTF8Recoder:
+class UTF8Recoder(object):
     """
     Iterator that reads an encoded stream and reencodes the input to UTF-8
     """
@@ -742,11 +805,11 @@ class UTF8Recoder:
     def __iter__(self):
         return self
 
-    def next(self):
-        return self.reader.next().encode("utf-8")
+    def __next__(self):
+        return next(self.reader).encode("utf-8")
 
 
-class UnicodeReader:
+class UnicodeReader(object):
     """
     A CSV reader which will iterate over lines in the CSV file "f",
     which is encoded in the given encoding.
@@ -756,9 +819,9 @@ class UnicodeReader:
         f = UTF8Recoder(f, encoding)
         self.reader = csv.reader(f, dialect=dialect, **kwds)
 
-    def next(self):
-        row = self.reader.next()
-        return [unicode(s, "utf-8") for s in row]
+    def __next__(self):
+        row = next(self.reader)
+        return [str(s, "utf-8") for s in row]
 
     def __iter__(self):
         return self
@@ -772,17 +835,16 @@ class UnicodeWriter:
 
     def __init__(self, f, dialect=csv.excel, encoding="utf-8", **kwds):
         # Redirect output to a queue
-        self.queue = cStringIO.StringIO()
+        self.queue = StringIO()
         self.writer = csv.writer(self.queue, dialect=dialect, **kwds)
         self.stream = f
         self.encoder = codecs.getincrementalencoder(encoding)()
 
     def writerow(self, row):
-        self.writer.writerow([s.encode("utf-8") for s in row])
-        # Fetch UTF-8 output from the queue ...
+        self.writer.writerow(row)
+        # Fetch output from the queue ...
         data = self.queue.getvalue()
-        data = data.decode("utf-8")
-        # ... and reencode it into the target encoding
+        # ... and encode it into the target encoding
         data = self.encoder.encode(data)
         # write to the target stream
         self.stream.write(data)
@@ -873,7 +935,7 @@ def directory_cleanup(dir_path, ndays):
         if not filename:
             continue
         file_path = os.path.join(dir_path, filename)
-        modified_dt = default_storage.modified_time(file_path)
+        modified_dt = default_storage.get_modified_time(file_path)
         if modified_dt + timedelta(days=ndays) < datetime.now():
             # the file is older than ndays, delete it
             default_storage.delete(file_path)
@@ -883,6 +945,7 @@ def directory_cleanup(dir_path, ndays):
 
 
 def checklist_update(key):
+    from tendenci.apps.base.models import ChecklistItem
     try:
         item = ChecklistItem.objects.get(key=key)
     except ChecklistItem.DoesNotExist:
@@ -898,16 +961,21 @@ def extract_pdf(fp):
     Extract text from PDF file.
     """
     rsrcmgr = PDFResourceManager()
-    retstr = cStringIO.StringIO()
-    codec = 'utf-8'
     laparams = LAParams()
-    device = TextConverter(rsrcmgr, retstr, codec=codec, laparams=laparams)
-    process_pdf(rsrcmgr, device, fp)
+    device = PDFPageAggregator(rsrcmgr, laparams=laparams)
+    interpreter = PDFPageInterpreter(rsrcmgr, device)
+    text_content = [] # a list of strings, each representing text collected from each page of the pdf
+    for page in PDFPage.create_pages(PDFDocument(PDFParser(fp))):
+        interpreter.process_page(page) # LTPage object for this page
+        layout = device.get_result() # layout is an LTPage object which may contain child objects
+        for lt_obj in layout: # extract text from text objects
+            if isinstance(lt_obj, LTTextBox) or isinstance(lt_obj, LTTextLine):
+                if isinstance(lt_obj.get_text(), str):
+                    text_content.append(lt_obj.get_text())
+                else:
+                    text_content.append(lt_obj.get_text().decode())
     device.close()
-    mystr = retstr.getvalue()
-    retstr.close()
-
-    return mystr
+    return '\n\n'.join(text_content)
 
 
 def normalize_field_names(fieldnames):
@@ -919,16 +987,16 @@ def normalize_field_names(fieldnames):
     return fieldnames
 
 
+@keep_lazy_text
 def truncate_words(s, num, end_text='...'):
     truncate = end_text and ' %s' % end_text or ''
     return Truncator(s).words(num, truncate=truncate)
-truncate_words = allow_lazy(truncate_words, unicode)
 
 
 def validate_email(s, quiet=True):
     try:
         _validate_email(s)
-        return True
+        return is_valid_domain(s)
     except Exception as e:
         if not quiet:
             raise e
@@ -936,8 +1004,8 @@ def validate_email(s, quiet=True):
 
 
 def get_latest_version():
-    import xmlrpclib
-    proxy = xmlrpclib.ServerProxy('http://pypi.python.org/pypi')
+    from six.moves import xmlrpc_client
+    proxy = xmlrpc_client.ServerProxy('http://pypi.python.org/pypi')
     return proxy.package_releases('tendenci')[0]
 
 

@@ -1,5 +1,8 @@
+from builtins import str
 import uuid
+
 from django.db import models
+#from django.urls import reverse
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.auth.models import User
@@ -39,7 +42,7 @@ class Career(TendenciBaseModel):
     experience = models.TextField(_('Experience'),
                                            blank=True,
                                            default='')
-    user = models.ForeignKey(User, related_name="careers")
+    user = models.ForeignKey(User, related_name="careers", on_delete=models.CASCADE)
 
     perms = GenericRelation(ObjectPermission,
                                   object_id_field="object_id",
@@ -52,14 +55,13 @@ class Career(TendenciBaseModel):
         verbose_name = _("Career")
         verbose_name_plural = _("Careers")
 
-    def __unicode__(self):
+    def __str__(self):
         return '%s - %s' % (self.company, self.user)
 
-#    @models.permalink
 #    def get_absolute_url(self):
-#        return ("career", [self.pk])
+#        return reverse('career', args=[self.pk])
 
     def save(self, *args, **kwargs):
-        self.guid = self.guid or unicode(uuid.uuid1())
+        self.guid = self.guid or str(uuid.uuid4())
 
         super(Career, self).save(*args, **kwargs)

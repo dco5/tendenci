@@ -1,3 +1,4 @@
+from builtins import str
 import re
 import imghdr
 import calendar
@@ -16,7 +17,7 @@ from django.forms.utils import ErrorList
 from importlib import import_module
 from django.contrib.auth.models import User, AnonymousUser
 from django.utils.safestring import mark_safe
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.template.defaultfilters import filesizeformat
 from django.conf import settings
 
@@ -33,7 +34,7 @@ from form_utils.forms import BetterModelForm
 from tendenci.libs.tinymce.widgets import TinyMCE
 from tendenci.apps.payments.models import PaymentMethod
 from tendenci.apps.perms.forms import TendenciBaseForm
-from tendenci.apps.base.fields import SplitDateTimeField, EmailVerificationField, CountrySelectField, PriceField
+from tendenci.apps.base.fields import EmailVerificationField, CountrySelectField, PriceField
 from tendenci.apps.base.forms import FormControlWidgetMixin
 from tendenci.apps.base.utils import tcurrency
 from tendenci.apps.emails.models import Email
@@ -47,8 +48,8 @@ from tendenci.apps.profiles.models import Profile
 from tendenci.apps.events.settings import FIELD_MAX_LENGTH
 from tendenci.apps.base.forms import CustomCatpchaField
 
-from fields import UseCustomRegField
-from widgets import UseCustomRegWidget
+from .fields import UseCustomRegField
+from .widgets import UseCustomRegWidget
 
 ALLOWED_LOGO_EXT = (
     '.jpg',
@@ -109,7 +110,7 @@ class EventSearchForm(forms.Form):
         user = kwargs.pop('user', None)
         super(EventSearchForm, self).__init__(*args, **kwargs)
 
-        if user and not user.is_authenticated():
+        if user and not user.is_authenticated:
             del self.fields['registration']
         if user and not user.is_superuser:
             self.fields['search_category'].choices = SEARCH_CATEGORIES
@@ -135,7 +136,7 @@ class EventSearchForm(forms.Form):
 
         if cat in ('id', 'owner__id', 'creator__id') :
             try:
-                x = int(q)
+                int(q)
             except ValueError:
                 self._errors['q'] = ErrorList([_('IDs must be an integer')])
 
@@ -164,7 +165,7 @@ class EventSimpleSearchForm(forms.Form):
 
         if cat in ('id', 'owner__id', 'creator__id') :
             try:
-                x = int(q)
+                int(q)
             except ValueError:
                 self._errors['q'] = ErrorList([_('IDs must be an integer')])
 
@@ -264,12 +265,12 @@ class FormForCustomRegForm(forms.ModelForm):
             else:
                 field_class = getattr(forms, field_class)
             field_args = {"label": mark_safe(field.label), "required": field.required}
-            arg_names = field_class.__init__.im_func.func_code.co_varnames
+            arg_names = field_class.__init__.__code__.co_varnames
             if "max_length" in arg_names:
                 field_args["max_length"] = FIELD_MAX_LENGTH
             if "choices" in arg_names:
                 choices = field.choices.split(",")
-                field_args["choices"] = zip(choices, choices)
+                field_args["choices"] = list(zip(choices, choices))
             if "initial" in arg_names:
                 default = field.default.lower()
                 if field_class == "BooleanField":
@@ -300,7 +301,7 @@ class FormForCustomRegForm(forms.ModelForm):
             # make the fields in the subsequent forms as not required
             if not reg_conf.require_guests_info:
                 if self.form_index and self.form_index > 0:
-                    for key in self.fields.keys():
+                    for key in self.fields:
                         self.fields[key].required = False
             else:
                 # this attr is required for form validation
@@ -333,7 +334,7 @@ class FormForCustomRegForm(forms.ModelForm):
         # add override and override_price to allow admin override the price
         if hasattr(self.event, 'is_table') and hasattr(self.event, 'free_event'):
             if self.event and not self.event.is_table and not self.event.free_event:
-                if (not self.user.is_anonymous() and self.user.profile.is_superuser):
+                if (not self.user.is_anonymous and self.user.profile.is_superuser):
                     self.fields['override'] = forms.BooleanField(label=_("Admin Price Override?"),
                                                                  required=False)
                     self.fields['override_price'] = forms.DecimalField(label=_("Override Price"),
@@ -386,7 +387,7 @@ class FormForCustomRegForm(forms.ModelForm):
                 email = self.cleaned_data.get('email', u'')
                 registrant_user = self.get_user(email)
 
-                if not registrant_user.is_anonymous():
+                if not registrant_user.is_anonymous:
 
                     if registrant_user.profile.is_superuser:
                         return pricing
@@ -522,14 +523,14 @@ class FormForCustomRegForm(forms.ModelForm):
 
 
 def _get_price_labels(pricing):
-    currency_symbol = get_setting("site", "global", "currencysymbol") or '$'
+    #currency_symbol = get_setting("site", "global", "currencysymbol") or '$'
     if pricing.target_display():
         target_display = ' (%s)' % pricing.target_display()
     else:
         target_display = ''
 
-    end_dt = '<br/>&nbsp;(ends ' + unicode(pricing.end_dt.date()) + ')'
-    description = '<br/>&nbsp;' + unicode(pricing.description)
+    end_dt = '<br/>&nbsp;(ends ' + str(pricing.end_dt.date()) + ')'
+    description = '<br/>&nbsp;' + str(pricing.description)
 
     return mark_safe('&nbsp;<strong><span data-price="%s">%s %s%s</span>%s</strong>%s' % (
                                       pricing.price,
@@ -540,48 +541,15 @@ def _get_price_labels(pricing):
                                       description) )
 
 
-# class RadioImageFieldRenderer(forms.widgets.RadioFieldRenderer):
-
-#     def __iter__(self):
-#         for i, choice in enumerate(self.choices):
-#             yield RadioImageInput(self.name, self.value, self.attrs.copy(), choice, i)
-
-#     def __getitem__(self, idx):
-#         choice = self.choices[idx] # Let the IndexError propogate
-#         return RadioImageInput(self.name, self.value, self.attrs.copy(), choice, idx)
-
-
-# class RadioImageInput(forms.widgets.RadioInput):
-
-#     def __unicode__(self):
-#         if 'id' in self.attrs:
-#             label_for = ' for="%s_%s"' % (self.attrs['id'], self.index)
-#         else:
-#             label_for = ''
-#         choice_label = self.choice_label
-#         return u'<label%s>%s %s</label>' % (label_for, self.tag(), choice_label)
-
-#     def tag(self):
-#         from django.utils.safestring import mark_safe
-#         from django.forms.util import flatatt
-
-#         if 'id' in self.attrs:
-#             self.attrs['id'] = '%s_%s' % (self.attrs['id'], self.index)
-#         final_attrs = dict(self.attrs, type='radio', name=self.name, value=self.choice_value)
-#         if self.is_checked():
-#             final_attrs['checked'] = 'checked'
-#         return mark_safe(u'<input%s />' % flatatt(final_attrs))
-
-
 class EventForm(TendenciBaseForm):
     description = forms.CharField(required=False,
         widget=TinyMCE(attrs={'style':'width:100%'},
         mce_attrs={'storme_app_label':Event._meta.app_label,
         'storme_model':Event._meta.model_name.lower()}))
 
-    start_dt = SplitDateTimeField(label=_('Start Date/Time'),
+    start_dt = forms.SplitDateTimeField(label=_('Start Date/Time'),
                                   initial=datetime.now()+timedelta(days=30))
-    end_dt = SplitDateTimeField(label=_('End Date/Time'),
+    end_dt = forms.SplitDateTimeField(label=_('End Date/Time'),
                                 initial=datetime.now()+timedelta(days=30, hours=2))
     all_day = forms.BooleanField(label=_('All Day'), required=False, initial=False)
     start_event_date = forms.DateField(
@@ -705,13 +673,13 @@ class EventForm(TendenciBaseForm):
 
         if self.instance.pk:
             self.fields['description'].widget.mce_attrs['app_instance_id'] = self.instance.pk
-            if 'private_slug' in self.fields.keys():
+            if 'private_slug' in self.fields:
                 self.fields['enable_private_slug'].help_text = self.instance.get_private_slug(absolute_url=True)
             self.fields['start_event_date'].initial = self.instance.start_dt.date()
             self.fields['end_event_date'].initial = self.instance.end_dt.date()
         else:
             # kwargs['instance'] always trumps initial
-            if 'private_slug' in self.fields.keys():
+            if 'private_slug' in self.fields:
                 self.fields['private_slug'].initial = self.instance.get_private_slug()
                 self.fields['enable_private_slug'].widget = forms.HiddenInput()
 
@@ -860,7 +828,7 @@ class ApplyRecurringChangesForm(forms.Form):
 
 class TypeChoiceField(forms.ModelChoiceField):
 
-    def __init__(self, queryset, empty_label=u"---------", cache_choices=False,
+    def __init__(self, queryset, empty_label=u"---------",
                  required=True, widget=None, label=None, initial=None, choices=None,
                  help_text=None, to_field_name=None, *args, **kwargs):
 
@@ -868,7 +836,6 @@ class TypeChoiceField(forms.ModelChoiceField):
             self.empty_label = None
         else:
             self.empty_label = empty_label
-        self.cache_choices = cache_choices
 
         self._choices = ()
         if choices:
@@ -877,7 +844,6 @@ class TypeChoiceField(forms.ModelChoiceField):
         forms.fields.ChoiceField.__init__(self, choices=self._choices, widget=widget)
 
         self.queryset = queryset
-        self.choice_cache = None
         self.to_field_name = to_field_name
 
 
@@ -937,7 +903,7 @@ class PlaceForm(FormControlWidgetMixin, forms.ModelForm):
 
         choices = [('', '------------------------------')]
         for p in places:
-            choices.append((p.pk, unicode(p)))
+            choices.append((p.pk, str(p)))
         if self.fields.get('place'):
             self.fields.get('place').choices = choices
 
@@ -1005,29 +971,6 @@ class SpeakerBaseFormSet(BaseModelFormSet):
                 if name and name in names:
                     raise forms.ValidationError(_("Speakers in an event must have distinct names. '%s' is already used." % name))
                 names.append(name)
-
-    def save(self, *args, **kwargs):
-        commit = kwargs.pop('commit', True)
-        self.deleted_objects = []
-        if not commit:
-            self.saved_forms = []
-        saved_instances = []
-
-        for form in self.initial_forms:
-            pk_name = self._pk_field.name
-            raw_pk_value = form._raw_value(pk_name)
-            pk_value = form.fields[pk_name].clean(raw_pk_value)
-            pk_value = getattr(pk_value, 'pk', pk_value)
-
-            speaker = self._existing_object(pk_value)
-            if self.can_delete and self._should_delete_form(form):
-                self.deleted_objects.append(speaker)
-                continue
-            saved_instances.append(self.save_existing(form, speaker, commit=commit))
-
-        new_instances = self.save_new_objects(commit)
-
-        return saved_instances + new_instances
 
 
 class SpeakerForm(FormControlWidgetMixin, BetterModelForm):
@@ -1122,10 +1065,10 @@ class PaymentForm(forms.ModelForm):
         exclude = ()
 
 
-class Reg8nConfPricingForm(BetterModelForm):
+class Reg8nConfPricingForm(FormControlWidgetMixin, BetterModelForm):
     label = "Pricing"
-    start_dt = SplitDateTimeField(label=_('Start Date/Time'), initial=datetime.now(), help_text=_('The date time this price starts to be available'))
-    end_dt = SplitDateTimeField(label=_('End Date/Time'), initial=datetime.now()+timedelta(days=30,hours=6), help_text=_('The date time this price ceases to be available'))
+    start_dt = forms.SplitDateTimeField(label=_('Start Date/Time'), initial=datetime.now(), help_text=_('The date time this price starts to be available'))
+    end_dt = forms.SplitDateTimeField(label=_('End Date/Time'), initial=datetime.now()+timedelta(days=30,hours=6), help_text=_('The date time this price ceases to be available'))
     price = PriceField(label=_('Price'), max_digits=21, decimal_places=2, initial=0.00)
     #dates = Reg8nDtField(label=_("Start and End"), required=False)
     groups = forms.MultipleChoiceField(required=False, choices=[])
@@ -1134,7 +1077,7 @@ class Reg8nConfPricingForm(BetterModelForm):
                                          initial='True')
 
     def __init__(self, *args, **kwargs):
-        reg_form_queryset = kwargs.pop('reg_form_queryset', None)
+        kwargs.pop('reg_form_queryset', None)
         self.user = kwargs.pop('user', None)
         self.reg_form_required = kwargs.pop('reg_form_required', False)
         super(Reg8nConfPricingForm, self).__init__(*args, **kwargs)
@@ -1168,7 +1111,7 @@ class Reg8nConfPricingForm(BetterModelForm):
         for group_id in group_list:
             if group_id:
                 try:
-                    group = Group.objects.get(pk=group_id)
+                    Group.objects.get(pk=group_id)
                     groups.append(group_id)
                 except Group.DoesNotExist:
                     raise forms.ValidationError(_('Invalid group selected.'))
@@ -1184,14 +1127,14 @@ class Reg8nConfPricingForm(BetterModelForm):
     def clean_quantity(self):
         # make sure that quantity is always a positive number
         quantity = self.cleaned_data['quantity']
-        if quantity <= 0:
+        if quantity is None or quantity <= 0:
             quantity = 1
         return quantity
 
     def clean(self):
         data = self.cleaned_data
         if 'end_dt' in data and data['start_dt'] > data['end_dt']:
-            raise forms.ValidationError(_('Start Date/Time should come after End Date/Time'))
+            raise forms.ValidationError(_('Pricing: Start Date/Time should come before End Date/Time'))
         return data
 
     class Meta:
@@ -1263,7 +1206,7 @@ class Reg8nConfPricingForm(BetterModelForm):
 class Reg8nEditForm(FormControlWidgetMixin, BetterModelForm):
     label = _('Registration')
     limit = forms.IntegerField(
-            _('Registration Limit'),
+            label=_('Registration Limit'),
             initial=0,
             help_text=_("Enter the maximum number of registrants. Use 0 for unlimited registrants")
     )
@@ -1272,7 +1215,7 @@ class Reg8nEditForm(FormControlWidgetMixin, BetterModelForm):
         widget=forms.CheckboxSelectMultiple(),
         required=False,
         initial=[1,2,3]) # first three items (inserted via fixture)
-    use_custom_reg = UseCustomRegField(label="Custom Registration Form")
+    use_custom_reg = UseCustomRegField(label="Custom Registration Form", required=False)
 
     registration_email_text = forms.CharField(required=False,
         widget=TinyMCE(attrs={'style':'width:100%'},
@@ -1321,7 +1264,7 @@ class Reg8nEditForm(FormControlWidgetMixin, BetterModelForm):
         }
 
     def __init__(self, *args, **kwargs):
-        user = kwargs.pop('user', None)
+        kwargs.pop('user', None)
         reg_form_queryset = kwargs.pop('reg_form_queryset', None)
         self.recurring_edit = kwargs.pop('recurring_edit', False)
         super(Reg8nEditForm, self).__init__(*args, **kwargs)
@@ -1486,7 +1429,7 @@ class Reg8nForm(forms.Form):
         self.fields['price'] = forms.DecimalField(
             widget=forms.HiddenInput(), initial=event.registration_configuration.price)
 
-        if user and user.is_authenticated():
+        if user and user.is_authenticated:
             self.fields.pop('captcha')
             user_fields = ['first_name', 'last_name', 'company_name', 'username', 'phone','email']
             for user_field in user_fields:
@@ -1496,13 +1439,13 @@ class Reg8nForm(forms.Form):
         data = self.cleaned_data['first_name']
 
         # detect markup
-        markup_pattern = re.compile('<[^>]*?>', re.I and re.M)
+        markup_pattern = re.compile(r'<[^>]*?>', re.I and re.M)
         markup = markup_pattern.search(data)
         if markup:
             raise forms.ValidationError(_("Markup is not allowed in the name field"))
 
         # detect URL and Email
-        pattern_string = '\w\.(com|net|org|co|cc|ru|ca|ly|gov)$'
+        pattern_string = r'\w\.(com|net|org|co|cc|ru|ca|ly|gov)$'
         pattern = re.compile(pattern_string, re.I and re.M)
         domain_extension = pattern.search(data)
         if domain_extension or "://" in data:
@@ -1580,13 +1523,16 @@ class RegistrationForm(forms.Form):
                 payment_methods = reg_conf.payment_method.exclude(
                     machine_name='credit card').order_by('pk')
 
+            if not self.user or self.user.is_anonymous or not self.user.is_superuser:
+                payment_methods = payment_methods.exclude(admin_only=True)
+
             self.fields['payment_method'] = forms.ModelChoiceField(
                 empty_label=None, queryset=payment_methods, widget=forms.RadioSelect(), initial=1, required=True)
 
 #            if user and user.profile.is_superuser:
 #                self.fields['amount_for_admin'] = forms.DecimalField(decimal_places=2, initial=event_price)
             if event.is_table and not event.free_event:
-                if (not self.user.is_anonymous() and self.user.is_superuser):
+                if (not self.user.is_anonymous and self.user.is_superuser):
                     self.fields['override_table'] = forms.BooleanField(label=_("Admin Price Override?"),
                                                                  required=False)
                     self.fields['override_price_table'] = forms.DecimalField(label=_("Override Price"),
@@ -1663,13 +1609,13 @@ class RegistrantForm(forms.Form):
                     field_args['label'] = field_name.title()
                 else:
                     field_class = getattr(forms, field_class)
-                arg_names = field_class.__init__.im_func.func_code.co_varnames
+                arg_names = field_class.__init__.__code__.co_varnames
                 if "max_length" in arg_names:
                     field_args["max_length"] = 100
                 if "choices" in arg_names:
                     choices = get_setting('module', 'events', 'regform_%s_choices' % field_name)
                     choices = choices.split(",")
-                    field_args["choices"] = zip(choices, choices)
+                    field_args["choices"] = list(zip(choices, choices))
                 if field_widget is not None:
                     module, widget = field_widget.rsplit(".", 1)
                     field_args["widget"] = getattr(import_module(module), widget)
@@ -1683,7 +1629,7 @@ class RegistrantForm(forms.Form):
         # make the fields in the subsequent forms as not required
         if not reg_conf.require_guests_info:
             if self.form_index and self.form_index > 0:
-                for key in self.fields.keys():
+                for key in self.fields:
                     self.fields[key].required = False
             if not self.event.is_table:
                 self.empty_permitted = False
@@ -1710,7 +1656,7 @@ class RegistrantForm(forms.Form):
                                 help_text=_('Please enter a member ID if a member price is selected.'))
 
         if not self.event.is_table and not self.event.free_event:
-            if (not self.user.is_anonymous() and self.user.is_superuser):
+            if (not self.user.is_anonymous and self.user.is_superuser):
                 self.fields['override'] = forms.BooleanField(label=_("Admin Price Override?"),
                                                              required=False)
                 self.fields['override_price'] = forms.DecimalField(label=_("Override Price"),
@@ -1726,13 +1672,13 @@ class RegistrantForm(forms.Form):
         data = self.cleaned_data['first_name']
 
         # detect markup
-        pattern = re.compile('<[^>]*?>', re.I and re.M)
+        pattern = re.compile(r'<[^>]*?>', re.I and re.M)
         markup = pattern.search(data)
         if markup:
             raise forms.ValidationError(_("Markup is not allowed in the name field"))
 
         # detect URL and Email
-        pattern_string = '\w\.(com|net|org|co|cc|ru|ca|ly|gov)$'
+        pattern_string = r'\w\.(com|net|org|co|cc|ru|ca|ly|gov)$'
         pattern = re.compile(pattern_string, re.I and re.M)
         domain_extension = pattern.search(data)
         if domain_extension or "://" in data:
@@ -1779,7 +1725,7 @@ class RegistrantForm(forms.Form):
                 email = self.cleaned_data.get('email', '')
                 registrant_user = self.get_user(email)
 
-                if not registrant_user.is_anonymous():
+                if not registrant_user.is_anonymous:
                     if pricing.allow_user:
                         return pricing
 
@@ -2314,15 +2260,15 @@ class StandardRegAdminForm(forms.Form):
 
 def add_months(sourcedate, months):
     month = sourcedate.month - 1 + months
-    year = sourcedate.year + month / 12
+    year = sourcedate.year + int(month / 12)
     month = month % 12 + 1
     day = min(sourcedate.day, calendar.monthrange(year,month)[1])
     return date(year,month,day)
 
 
 class EventReportFilterForm(forms.Form):
-    start_dt = SplitDateTimeField(label=_('Start Date/Time'), required=False)
-    end_dt = SplitDateTimeField(label=_('End Date/Time'), required=False)
+    start_dt = forms.SplitDateTimeField(label=_('Start Date/Time'), required=False)
+    end_dt = forms.SplitDateTimeField(label=_('End Date/Time'), required=False)
 
     def __init__(self, *args, **kwargs):
         super(EventReportFilterForm, self).__init__(*args, **kwargs)

@@ -1,31 +1,49 @@
+from warnings import warn
 from django.conf import settings
-from tendenci.apps.site_settings.utils import get_setting
-from tendenci.apps.theme.utils import get_theme_info
+from tendenci.apps.theme.utils import (get_active_theme, get_theme,
+                                       is_builtin_theme, get_builtin_theme_dir,
+                                       get_theme_info)
 
 
 def theme(request):
-    contexts = {}
+    context = {}
+
     if 'theme' in request.GET and request.user.profile.is_superuser:
-        if request.GET.get('theme'):
-            request.session['theme'] = request.GET.get('theme')
+        theme = request.GET.get('theme')
+        if theme:
+            request.session['theme'] = theme
         elif 'theme' in request.session:
             del request.session['theme']
 
-    if 'toggle_template' in request.GET:
-        contexts['TOGGLE_TEMPLATE'] = True
+    context['ACTIVE_THEME'] = get_active_theme()
+    context['THEME'] = theme = get_theme(context['ACTIVE_THEME'])
 
-    contexts['ACTIVE_THEME'] = get_setting('module', 'theme_editor', 'theme')
-    theme = request.session.get('theme', contexts['ACTIVE_THEME'])
-    contexts['THEME'] = theme
+    context['THEME_INFO'] = get_theme_info(theme)
 
-    if settings.USE_S3_STORAGE:
-        contexts['THEME_URL'] = '%s/%s/%s/themes/%s/' % (settings.S3_ROOT_URL,
-            settings.AWS_STORAGE_BUCKET_NAME, settings.AWS_LOCATION, theme)
+    # Backward compatibility for old themes
+    def warn_theme_urls(value):
+        warn("{{ THEME_URL }}media/<path> is deprecated, use {% static '<path>' %} instead", DeprecationWarning)
+        return value
+    if is_builtin_theme(theme):
+        theme_url = '%sthemes/%s/'%(settings.STATIC_URL, get_builtin_theme_dir(theme))
+        def warn_theme_url(value=theme_url):  # noqa: E306
+            return warn_theme_urls(value)
+        context['THEME_URL'] = warn_theme_url
+    elif settings.USE_S3_STORAGE:
+        theme_url = '%s/%s/%s/themes/%s/'%(
+            settings.S3_ROOT_URL, settings.AWS_STORAGE_BUCKET_NAME, settings.AWS_LOCATION, theme)
+        def warn_theme_url(value=theme_url):  # noqa: E306
+            return warn_theme_urls(value)
+        context['THEME_URL'] = warn_theme_url
     else:
-        contexts['THEME_URL'] = '/themes/' + theme + '/'
+        theme_url = '/themes/'+theme+'/'
+        def warn_theme_url(value=theme_url):  # noqa: E306
+            return warn_theme_urls(value)
+        context['THEME_URL'] = warn_theme_url
+    local_theme_url = '/themes/'+theme+'/'
+    def warn_local_theme_url(value=local_theme_url):  # noqa: E306
+        warn("{{ LOCAL_THEME_URL }}media/<path> is deprecated, use {% local_static '<path>' %} instead", DeprecationWarning)
+        return value
+    context['LOCAL_THEME_URL'] = warn_local_theme_url
 
-    contexts['LOCAL_THEME_URL'] = '/themes/' + theme + '/'
-
-    contexts['THEME_INFO'] = get_theme_info(theme)
-
-    return contexts
+    return context

@@ -1,16 +1,19 @@
 from __future__ import print_function
+from builtins import str
 import uuid
 import os
 from PIL import Image as PILImage
 from PIL.ExifTags import TAGS as PILTAGS
 from PIL import ImageFile
 from PIL import ImageFilter
+from PIL import ImageEnhance
 
 from datetime import datetime
 from inspect import isclass
-from cStringIO import StringIO
+from io import BytesIO
 
 from django.db import models
+from django.urls import reverse
 from django.db.models.signals import post_init
 from django.contrib.auth.models import User, AnonymousUser
 from django.contrib.contenttypes.fields import GenericRelation, GenericForeignKey
@@ -20,9 +23,10 @@ from django.core.files.storage import default_storage
 from django.core.exceptions import SuspiciousOperation
 from django.conf import settings
 from django.core.cache import cache
-from django.utils.encoding import smart_str, force_unicode
+from django.utils.encoding import smart_str, force_text
 from django.utils.functional import curry
 from django.utils.translation import ugettext_lazy as _
+from django.utils.safestring import mark_safe
 import simplejson
 import requests
 
@@ -34,6 +38,7 @@ from tendenci.apps.perms.models import TendenciBaseModel
 from tendenci.apps.perms.object_perms import ObjectPermission
 from tendenci.apps.perms.utils import get_query_filters
 from tendenci.apps.base.fields import DictField
+from tendenci.apps.base.utils import apply_orientation
 from tendenci.apps.photos.managers import PhotoManager, PhotoSetManager
 from tendenci.apps.meta.models import Meta as MetaTags
 from tendenci.apps.photos.module_meta import PhotoMeta
@@ -43,6 +48,7 @@ from tendenci.apps.photos.utils import EXIF
 from tendenci.apps.photos.utils.reflection import add_reflection
 from tendenci.apps.photos.utils.watermark import apply_watermark
 from tendenci.libs.abstracts.models import OrderingBaseModel
+from tendenci.apps.theme.templatetags.static import static
 
 # max_length setting for the ImageModel ImageField
 IMAGE_FIELD_MAX_LENGTH = getattr(settings, 'PHOTOS_IMAGE_FIELD_MAX_LENGTH', 100)
@@ -53,12 +59,10 @@ SAMPLE_IMAGE_PATH = getattr(settings, 'SAMPLE_IMAGE_PATH', os.path.join(os.path.
 # Modify image file buffer size.
 ImageFile.MAXBLOCK = getattr(settings, 'PHOTOS_MAXBLOCK', 256 * 2 ** 10)
 
-PHOTOS_DIR = settings.MEDIA_URL
-
 
 def get_storage_path(instance, filename):
     # AWS S3 max key length: 260 characters
-    return os.path.join('photos', uuid.uuid1().get_hex()[:8], filename)
+    return os.path.join('photos', uuid.uuid4().hex[:8], filename)
 
 # Quality options for JPEG images
 JPEG_QUALITY_CHOICES = (
@@ -108,15 +112,17 @@ class ImageModel(models.Model):
     date_taken = models.DateTimeField(_('date taken'), null=True, blank=True, editable=False)
     view_count = models.PositiveIntegerField(default=0, editable=False)
     crop_from = models.CharField(_('crop from'), blank=True, max_length=10, default='center', choices=CROP_ANCHOR_CHOICES)
-    effect = models.ForeignKey('PhotoEffect', null=True, blank=True, related_name="%(class)s_related", verbose_name=_('effect'))
+    effect = models.ForeignKey('PhotoEffect', null=True, blank=True,
+                               on_delete=models.SET_NULL,
+                               related_name="%(class)s_related", verbose_name=_('effect'))
 
     class Meta:
         abstract = True
 
     def EXIF(self):
         try:
-            content = default_storage.open(unicode(self.image)).read()
-            im = PILImage.open(StringIO(content))
+            content = default_storage.open(str(self.image)).read()
+            im = PILImage.open(BytesIO(content))
         except IOError:
             return
 
@@ -128,6 +134,7 @@ class ImageModel(models.Model):
             except:
                 return {}
 
+    @mark_safe
     def admin_thumbnail(self):
         func = getattr(self, 'get_admin_thumbnail_url', None)
         if func is None:
@@ -140,11 +147,10 @@ class ImageModel(models.Model):
                 return u'<a href="%s"><img src="%s"></a>' % \
                     (self.image.url, func())
     admin_thumbnail.short_description = _('Thumbnail')
-    admin_thumbnail.allow_tags = True
 
     def cache_path(self):
         # example 'photos/cache/3949a2d9' or 'photos/cache'
-        l = unicode(self.image).split('/')
+        l = str(self.image).split('/')
         l.insert(1, 'cache')
         return os.path.dirname('/'.join(l))
 
@@ -152,7 +158,7 @@ class ImageModel(models.Model):
         return os.path.join(settings.MEDIA_URL, self.cache_path())
 
     def image_filename(self):
-        return os.path.basename(force_unicode(self.image))
+        return os.path.basename(force_text(self.image))
 
     def _get_filename_for_size(self, size):
         size = getattr(size, 'name', size)
@@ -194,7 +200,7 @@ class ImageModel(models.Model):
         models.Model.save(self)
 
     def add_accessor_methods(self, *args, **kwargs):
-        for size in PhotoSizeCache().sizes.keys():
+        for size in PhotoSizeCache().sizes:
             setattr(self, 'get_%s_size' % size,
                     curry(self._get_SIZE_size, size=size))
             setattr(self, 'get_%s_photosize' % size,
@@ -216,6 +222,7 @@ class ImageModel(models.Model):
         return False
 
     def resize_image(self, im, photosize):
+        im = apply_orientation(im)
         cur_width, cur_height = im.size
         new_width, new_height = photosize.size
         if photosize.crop:
@@ -256,14 +263,12 @@ class ImageModel(models.Model):
         return im
 
     def create_size(self, photosize):
-        from django.core.files.storage import default_storage
-
         if self.size_exists(photosize):
             return
 
         try:
-            content = default_storage.open(unicode(self.image)).read()
-            im = PILImage.open(StringIO(content))
+            content = default_storage.open(str(self.image)).read()
+            im = PILImage.open(BytesIO(content))
         except IOError as e:
             print(e)
             return
@@ -288,8 +293,7 @@ class ImageModel(models.Model):
         im_filename = getattr(self, "get_%s_filename" % photosize.name)()
 
         try:
-            import StringIO as StringIO2
-            buffer = StringIO2.StringIO()
+            buffer = BytesIO()
             im.save(buffer, im_format, quality=int(photosize.quality), optimize=True)
             default_storage.save(im_filename, ContentFile(buffer.getvalue()))
         except IOError as e:
@@ -356,10 +360,10 @@ class BaseEffect(models.Model):
         abstract = True
 
     def sample_dir(self):
-        return os.path.join(settings.MEDIA_ROOT, PHOTOS_DIR, 'samples')
+        return os.path.join(settings.MEDIA_ROOT, settings.PHOTOS_DIR, 'samples')
 
     def sample_url(self):
-        return settings.MEDIA_URL + '/'.join([PHOTOS_DIR, 'samples', '%s %s.jpg' % (self.name.lower(), 'sample')])
+        return settings.MEDIA_URL + '/'.join([settings.PHOTOS_DIR, 'samples', '%s %s.jpg' % (self.name.lower(), 'sample')])
 
     def sample_filename(self):
         return os.path.join(self.sample_dir(), '%s %s.jpg' % (self.name.lower(), 'sample'))
@@ -374,10 +378,10 @@ class BaseEffect(models.Model):
         im = self.process(im)
         im.save(self.sample_filename(), 'JPEG', quality=90, optimize=True)
 
+    @mark_safe
     def admin_sample(self):
         return u'<img src="%s">' % self.sample_url()
     admin_sample.short_description = 'Sample'
-    admin_sample.allow_tags = True
 
     def pre_process(self, im):
         return im
@@ -390,11 +394,8 @@ class BaseEffect(models.Model):
         im = self.post_process(im)
         return im
 
-    def __unicode__(self):
-        return self.name
-
     def __str__(self):
-        return self.__unicode__()
+        return self.name
 
     def save(self, *args, **kwargs):
         try:
@@ -462,7 +463,7 @@ class PhotoEffect(BaseEffect):
 
 
 class Watermark(BaseEffect):
-    image = models.ImageField(_('image'), upload_to=PHOTOS_DIR + "/watermarks")
+    image = models.ImageField(_('image'), upload_to=settings.PHOTOS_DIR + "/watermarks")
     style = models.CharField(_('style'), max_length=5, choices=WATERMARK_STYLE_CHOICES, default='scale')
     opacity = models.FloatField(_('opacity'), default=1, help_text=_("The opacity of the overlay."))
 
@@ -473,8 +474,8 @@ class Watermark(BaseEffect):
 
     def post_process(self, im):
         try:
-            content = default_storage.open(unicode(self.image)).read()
-            mark = PILImage.open(StringIO(content))
+            content = default_storage.open(str(self.image)).read()
+            mark = PILImage.open(BytesIO(content))
         except IOError as e:
             raise e
 
@@ -490,8 +491,8 @@ class PhotoSize(models.Model):
     crop = models.BooleanField(_('crop to fit?'), default=False, help_text=_('If selected the image will be scaled and cropped to fit the supplied dimensions.'))
     pre_cache = models.BooleanField(_('pre-cache?'), default=False, help_text=_('If selected this photo size will be pre-cached as photos are added.'))
     increment_count = models.BooleanField(_('increment view count?'), default=False, help_text=_('If selected the image\'s "view_count" will be incremented when this photo size is displayed.'))
-    effect = models.ForeignKey('PhotoEffect', null=True, blank=True, related_name='photo_sizes', verbose_name=_('photo effect'))
-    watermark = models.ForeignKey('Watermark', null=True, blank=True, related_name='photo_sizes', verbose_name=_('watermark image'))
+    effect = models.ForeignKey('PhotoEffect', null=True, blank=True, related_name='photo_sizes', verbose_name=_('photo effect'), on_delete=models.CASCADE)
+    watermark = models.ForeignKey('Watermark', null=True, blank=True, related_name='photo_sizes', verbose_name=_('watermark image'), on_delete=models.CASCADE)
 
     class Meta:
         ordering = ['width', 'height']
@@ -499,11 +500,8 @@ class PhotoSize(models.Model):
         verbose_name_plural = _('photo sizes')
         app_label = 'photos'
 
-    def __unicode__(self):
-        return self.name
-
     def __str__(self):
-        return self.__unicode__()
+        return self.name
 
     def clear_cache(self):
         for cls in ImageModel.__subclasses__():
@@ -576,11 +574,11 @@ class PhotoSet(OrderingBaseModel, TendenciBaseModel):
 
     objects = PhotoSetManager()
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
     def save(self, *args, **kwargs):
-        self.guid = self.guid or unicode(uuid.uuid1())
+        self.guid = self.guid or str(uuid.uuid4())
 
         super(PhotoSet, self).save()
 
@@ -594,10 +592,10 @@ class PhotoSet(OrderingBaseModel, TendenciBaseModel):
                     cache.delete("photos_cache_set.%s" % photo.pk)
 
     def get_default_cover_photo_small(self):
-        return settings.STATIC_URL + "images/default-photo-small.jpg"
+        return static('images/default-photo-small.jpg')
 
     def get_default_cover_photo(self):
-        return settings.STATIC_URL + "images/default-photo-album-cover.jpg"
+        return static('images/default-photo-album-cover.jpg')
 
     def get_cover_photo(self, *args, **kwargs):
         """ get latest thumbnail url """
@@ -631,9 +629,8 @@ class PhotoSet(OrderingBaseModel, TendenciBaseModel):
             return True
         return False
 
-    @models.permalink
     def get_absolute_url(self):
-        return ("photoset_details", [self.pk])
+        return reverse('photoset_details', args=[self.pk])
 
     def get_images(self, user=None, status=True, status_detail='active'):
         """
@@ -648,7 +645,7 @@ class PhotoSet(OrderingBaseModel, TendenciBaseModel):
 
         photos = Image.objects.filter(filters).filter(photoset=self.pk)
 
-        if user.is_authenticated():
+        if user.is_authenticated:
             photos = photos.distinct()
 
         return photos
@@ -708,7 +705,7 @@ class Image(OrderingBaseModel, ImageModel, TendenciBaseModel):
     safetylevel = models.IntegerField(_('safety level'), choices=SAFETY_LEVEL, default=3)
     photoset = models.ManyToManyField(PhotoSet, blank=True, verbose_name=_('photo set'))
     tags = TagField(blank=True, help_text=_("Comma delimited (eg. mickey, donald, goofy)"))
-    license = models.ForeignKey('License', null=True, blank=True)
+    license = models.ForeignKey('License', null=True, blank=True, on_delete=models.SET_NULL)
     group = models.ForeignKey(Group, null=True, default=get_default_group, on_delete=models.SET_NULL, blank=True)
     exif_data = DictField(_('exif'), null=True)
     photographer = models.CharField(_('Photographer'),
@@ -716,7 +713,7 @@ class Image(OrderingBaseModel, ImageModel, TendenciBaseModel):
                                     max_length=100)
 
     # html-meta tags
-    meta = models.OneToOneField(MetaTags, blank=True, null=True)
+    meta = models.OneToOneField(MetaTags, blank=True, null=True, on_delete=models.SET_NULL)
 
     perms = GenericRelation(ObjectPermission,
                                           object_id_field="object_id",
@@ -737,7 +734,7 @@ class Image(OrderingBaseModel, ImageModel, TendenciBaseModel):
     def save(self, *args, **kwargs):
         initial_save = not self.id
         if not self.id:
-            self.guid = str(uuid.uuid1())
+            self.guid = str(uuid.uuid4())
 
         super(Image, self).save(*args, **kwargs)
         # clear the cache
@@ -788,13 +785,12 @@ class Image(OrderingBaseModel, ImageModel, TendenciBaseModel):
             # delete actual image; do not save() self.instance
             self.image.delete(save=False)
 
-    @models.permalink
     def get_absolute_url(self):
         try:
             photo_set = self.photoset.all()[0]
         except IndexError:
-            return ("photo", [self.pk])
-        return ("photo", [self.pk, photo_set.pk])
+            return reverse("photo", args=[self.pk])
+        return reverse('photo', args=[self.pk, photo_set.pk])
 
     def get_exif_data(self):
         """
@@ -805,6 +801,9 @@ class Image(OrderingBaseModel, ImageModel, TendenciBaseModel):
             exif = img._getexif()
         except (AttributeError, IOError):
             return False
+        
+        if self.exif_data is None:
+            self.exif_data = {}
 
         if exif:
             for tag, value in exif.items():
@@ -952,13 +951,13 @@ class Image(OrderingBaseModel, ImageModel, TendenciBaseModel):
         return License.objects.get(id=1)
 
     def file_exists(self):
-        return default_storage.exists(unicode(self.image))
+        return default_storage.exists(str(self.image))
 
     def default_thumbnail(self):
-        return settings.STATIC_URL + "images/default-photo-album-cover.jpg"
+        return static('images/default-photo-album-cover.jpg')
 
     def get_file_from_remote_storage(self):
-        return StringIO(default_storage.open(self.image.file.name).read())
+        return BytesIO(default_storage.open(self.image.file.name).read())
 
     def image_dimensions(self):
         try:
@@ -972,7 +971,7 @@ class Image(OrderingBaseModel, ImageModel, TendenciBaseModel):
 
     objects = PhotoManager()
 
-    def __unicode__(self):
+    def __str__(self):
         return self.title
 
 class License(models.Model):
@@ -988,7 +987,7 @@ class License(models.Model):
     class Meta:
         app_label = 'photos'
 
-    def __unicode__(self):
+    def __str__(self):
        return "%s" % (self.name)
 
 
@@ -997,8 +996,8 @@ class Pool(models.Model):
     model for a photo to be applied to an object
     """
 
-    photo = models.ForeignKey(Image)
-    content_type = models.ForeignKey(ContentType)
+    photo = models.ForeignKey(Image, on_delete=models.CASCADE)
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
     object_id = models.PositiveIntegerField()
     content_object = GenericForeignKey()
     created_at = models.DateTimeField(_('created_at'), default=datetime.now)
@@ -1015,13 +1014,13 @@ class AlbumCover(models.Model):
     """
     model to mark a photo set's album cover
     """
-    photoset = models.OneToOneField(PhotoSet)
-    photo = models.ForeignKey(Image)
+    photoset = models.OneToOneField(PhotoSet, on_delete=models.CASCADE)
+    photo = models.ForeignKey(Image, on_delete=models.CASCADE)
 
     class Meta:
         app_label = 'photos'
 
-    def __unicode__(self):
+    def __str__(self):
         return self.photo.title
 
 # Set up the accessor methods

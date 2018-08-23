@@ -1,16 +1,19 @@
 import uuid
 from datetime import datetime
 from django.db import models
+from django.urls import reverse
 from tendenci.apps.user_groups.models import Group
 from tendenci.apps.user_groups.utils import get_default_group
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.contenttypes.fields import GenericRelation
-from timezones.utils import adjust_datetime_to_timezone
 from django.conf import settings
+from django.core.urlresolvers import reverse
 
 from tagging.fields import TagField
+from timezone_field import TimeZoneField
+
 from tendenci.apps.base.fields import SlugField
-from timezones.fields import TimeZoneField
+from tendenci.apps.base.utils import adjust_datetime_to_timezone, get_timezone_choices
 from tendenci.apps.perms.models import TendenciBaseModel
 from tendenci.apps.perms.object_perms import ObjectPermission
 from tendenci.apps.categories.models import CategoryItem
@@ -18,6 +21,7 @@ from tendenci.apps.articles.managers import ArticleManager
 from tendenci.libs.tinymce import models as tinymce_models
 from tendenci.apps.meta.models import Meta as MetaTags
 from tendenci.apps.articles.module_meta import ArticleMeta
+from tendenci.apps.files.models import File
 
 
 class Article(TendenciBaseModel):
@@ -28,7 +32,7 @@ class Article(TendenciBaseModel):
 
     guid = models.CharField(max_length=40)
     slug = SlugField(_('URL Path'), unique=True)
-    timezone = TimeZoneField(_('Time Zone'))
+    timezone = TimeZoneField(verbose_name=_('Time Zone'), default='US/Central', choices=get_timezone_choices(), max_length=100)
     headline = models.CharField(max_length=200, blank=True)
     summary = models.TextField(blank=True)
     body = tinymce_models.HTMLField()
@@ -42,6 +46,11 @@ class Article(TendenciBaseModel):
     fax = models.CharField(max_length=50, blank=True)
     email = models.CharField(max_length=120, blank=True)
     website = models.CharField(max_length=300, blank=True)
+    thumbnail = models.ForeignKey(File, null=True,
+                                  on_delete=models.SET_NULL,
+                                  help_text=_('The thumbnail image can be used on your homepage ' +
+                                 'or sidebar if it is setup in your theme. The thumbnail image ' +
+                                 'will not display on the news page.'))
     release_dt = models.DateTimeField(_('Release Date/Time'), null=True, blank=True)
     # used for better performance when retrieving a list of released articles
     release_dt_local = models.DateTimeField(null=True, blank=True)
@@ -59,7 +68,7 @@ class Article(TendenciBaseModel):
     not_official_content = models.BooleanField(_('Official Content'), blank=True, default=True)
 
     # html-meta tags
-    meta = models.OneToOneField(MetaTags, null=True)
+    meta = models.OneToOneField(MetaTags, null=True, on_delete=models.SET_NULL)
 
     categories = GenericRelation(CategoryItem,
                                           object_id_field="object_id",
@@ -84,20 +93,24 @@ class Article(TendenciBaseModel):
         """
         return ArticleMeta().get_meta(self, name)
 
-    @models.permalink
     def get_absolute_url(self):
-        return ("article", [self.slug])
+        return reverse('article', args=[self.slug])
 
-    @models.permalink
     def get_version_url(self, hash):
-        return ("article.version", [hash])
+        return reverse('article.version', args=[hash])
 
-    def __unicode__(self):
+    def __str__(self):
         return self.headline
+
+    def get_thumbnail_url(self):
+        if not self.thumbnail:
+            return u''
+
+        return reverse('file', args=[self.thumbnail.pk])
 
     def save(self, *args, **kwargs):
         if not self.id:
-            self.guid = str(uuid.uuid1())
+            self.guid = str(uuid.uuid4())
         self.assign_release_dt_local()
         super(Article, self).save(*args, **kwargs)
 
@@ -128,7 +141,7 @@ class Article(TendenciBaseModel):
     @property
     def category_set(self):
         items = {}
-        for cat in self.categories.select_related('category__name', 'parent__name'):
+        for cat in self.categories.select_related('category', 'parent'):
             if cat.category:
                 items["category"] = cat.category
             elif cat.parent:

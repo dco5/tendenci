@@ -1,33 +1,37 @@
 from django.contrib import admin
-from django.conf import settings
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.http import HttpResponseRedirect
 from django.contrib.admin import SimpleListFilter
-from django.utils.encoding import force_unicode
+from django.utils.encoding import force_text
 from django.utils.translation import ugettext_lazy as _
-from django.conf.urls import patterns, url
+from django.conf.urls import url
 from django.shortcuts import get_object_or_404, redirect
+from django.utils.safestring import mark_safe
 
 from tendenci.apps.corporate_memberships.models import (
     CorporateMembershipType,
     CorpMembershipApp,
     CorpMembershipAppField,
     CorpMembership,
+    CorpMembershipRep,
     CorpProfile,
     Notice)
 from tendenci.apps.corporate_memberships.forms import (
     CorporateMembershipTypeForm,
     CorpMembershipAppForm,
     NoticeForm,
-    CorpMembershipAppFieldAdminForm)
+    CorpMembershipAppFieldAdminForm,
+    CorpProfileAdminForm)
+from tendenci.apps.perms.admin import TendenciBaseModelAdmin
 
 from tendenci.apps.base.utils import tcurrency
 
 from tendenci.apps.event_logs.models import EventLog
 from tendenci.apps.site_settings.utils import get_setting
+from tendenci.apps.theme.templatetags.static import static
 
 
-class CorporateMembershipTypeAdmin(admin.ModelAdmin):
+class CorporateMembershipTypeAdmin(TendenciBaseModelAdmin):
     list_display = ['name', 'id', 'price', 'renewal_price', 'membership_type', 'apply_cap',
                      'membership_cap', 'allow_above_cap', 'above_cap_price', 'admin_only', 'status_detail', 'position']
     list_filter = ['name', 'price', 'status_detail']
@@ -43,12 +47,13 @@ class CorporateMembershipTypeAdmin(admin.ModelAdmin):
     )
 
     form = CorporateMembershipTypeForm
+    ordering = ['-position']
 
     class Media:
         js = (
             '//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js',
             '//ajax.googleapis.com/ajax/libs/jqueryui/1.11.0/jquery-ui.min.js',
-            '%sjs/admin/admin-list-reorder.js' % settings.STATIC_URL,
+            static('js/admin/admin-list-reorder.js'),
         )
 
     def get_queryset(self, request):
@@ -89,7 +94,9 @@ class CorpMembershipAppFieldAdmin(admin.TabularInline):
 class CorpMembershipAppAdmin(admin.ModelAdmin):
     inlines = (CorpMembershipAppFieldAdmin, )
     prepopulated_fields = {'slug': ['name']}
-    list_display = ('name', 'id', 'application_form_link', 'status_detail')
+    list_display = ('id', 'name', 'application_form_link', 'status_detail',
+                    'dues_reps_group_with_link', 'member_reps_group_with_link')
+    list_display_links = ('name',)
     search_fields = ('name', 'status_detail')
     fieldsets = (
         (None, {'fields': ('name', 'slug', 'authentication_method',
@@ -99,6 +106,7 @@ class CorpMembershipAppAdmin(admin.ModelAdmin):
                            'include_tax', 'tax_rate',
                            'memb_app'
                            )},),
+        (_('Parent Entities'), {'fields': ('parent_entities',)}),
         (_('Permissions'), {'fields': ('allow_anonymous_view',)}),
         (_('Advanced Permissions'), {'classes': ('collapse',), 'fields': (
             'user_perms',
@@ -109,24 +117,44 @@ class CorpMembershipAppAdmin(admin.ModelAdmin):
             'status_detail',
         )}),
     )
-
+    filter_vertical = ('parent_entities',)
     form = CorpMembershipAppForm
 
     class Media:
         js = (
             '//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js',
             '//ajax.googleapis.com/ajax/libs/jqueryui/1.11.0/jquery-ui.min.js',
-            '%sjs/admin/corpmembershipapp_tabular_inline_ordering.js' % settings.STATIC_URL,
-            '%sjs/global/tinymce.event_handlers.js' % settings.STATIC_URL,
-            '%sjs/tax_fields.js' % settings.STATIC_URL,
+            static('js/admin/corpmembershipapp_tabular_inline_ordering.js'),
+            static('js/global/tinymce.event_handlers.js'),
+            static('js/tax_fields.js'),
         )
-        css = {'all': ['%scss/admin/dynamic-inlines-with-sort.css' % settings.STATIC_URL,
-                       '%scss/corpmemberships-admin.css' % settings.STATIC_URL], }
+        css = {'all': [static('css/admin/dynamic-inlines-with-sort.css'),
+                       static('css/corpmemberships-admin.css')], }
 
     def get_queryset(self, request):
         qs = super(CorpMembershipAppAdmin, self).get_queryset(request)
         # filter out soft-deleted items
         return qs.filter(status=True)
+
+    @mark_safe
+    def dues_reps_group_with_link(self, instance):
+        if instance.dues_reps_group:
+            return '<a href="%s">%s</a>' % (
+                  reverse('group.detail',
+                          args=[instance.dues_reps_group.slug]),
+                instance.dues_reps_group.name)
+        return ''
+    dues_reps_group_with_link.short_description = _('Dues Reps Group')
+
+    @mark_safe
+    def member_reps_group_with_link(self, instance):
+        if instance.member_reps_group:
+            return '<a href="%s">%s</a>' % (
+                  reverse('group.detail',
+                          args=[instance.member_reps_group.slug]),
+                instance.member_reps_group.name)
+        return ''
+    member_reps_group_with_link.short_description = _('Member Reps Group')
 
 
 class StatusDetailFilter(SimpleListFilter):
@@ -149,24 +177,144 @@ class StatusDetailFilter(SimpleListFilter):
         return queryset
 
 
-class CorpMembershipAdmin(admin.ModelAdmin):
-    list_display = ['id', 'corp_profile',
-                    'expiration_dt',
-                    'approved', 'status_detail',
+def approve_selected(modeladmin, request, queryset):
+    """
+    Approves selected corp memberships.
+    """
+    # process only pending corp. memberships
+    corp_memberships = queryset.filter(
+        status=True, status_detail__in=['pending', 'paid - pending approval'])
+
+    for corp_membership in corp_memberships:
+        if corp_membership.renewal:
+            corp_membership.approve_renewal(request)
+        else:
+            corp_membership.approve_join(request,
+                                **{'create_new': True,
+                              'assign_to_user': None})
+
+approve_selected.short_description = u'Approve selected'
+
+class CorpMembershipAdmin(TendenciBaseModelAdmin):
+    list_display = ['profile',
+                    'statusdetail',
+                    'parent_entity',
+                    'cm_type',
+                    'join_date',
+                    'renew_date',
+                    'expire_date',
+#                     'dues_reps',
+#                     'member_reps',
+                    'roster_link',
                     'invoice_url']
-    list_display_links = ('corp_profile',)
-    list_filter = [StatusDetailFilter, 'join_dt', 'expiration_dt']
+    list_filter = ['corporate_membership_type', StatusDetailFilter, 'join_dt', 'expiration_dt']
     search_fields = ['corp_profile__name']
+
+    actions = [approve_selected,]
 
     fieldsets = (
         (None, {'fields': ()}),
     )
 
-    def queryset(self, request):
-        return super(CorpMembershipAdmin, self).queryset(request
+    def get_queryset(self, request):
+        """
+        Excludes archive
+        """
+        return super(CorpMembershipAdmin, self).get_queryset(request
                     ).exclude(status_detail='archive'
                               ).order_by('status_detail',
                                          'corp_profile__name')
+
+    @mark_safe
+    def profile(self, instance):
+        return '<a href="%s">%s</a>' % (
+              reverse('admin:corporate_memberships_corpprofile_change',
+                      args=[instance.corp_profile.id]),
+              instance.corp_profile.name,)
+    profile.short_description = _('Corp Profile')
+    profile.admin_order_field = 'corp_profile__name'
+
+    def statusdetail(self, instance):
+        return instance.status_detail
+    statusdetail.short_description = _('Status')
+    statusdetail.admin_order_field = 'status_detail'
+
+    def parent_entity(self, instance):
+        return instance.corp_profile.parent_entity
+    parent_entity.short_description = _('Parent Entity')
+    parent_entity.admin_order_field = 'corp_profile__parent_entity'
+
+    @mark_safe
+    def cm_type(self, instance):
+        return '<a href="%s">%s</a>' % (
+              reverse('admin:corporate_memberships_corporatemembershiptype_change',
+                      args=[instance.corporate_membership_type.id]),
+              instance.corporate_membership_type.name,)
+    cm_type.short_description = _('Membership Type')
+    cm_type.admin_order_field = 'corporate_membership_type'
+
+    def join_date(self, instance):
+        if not instance.join_dt:
+            return ''
+        return instance.join_dt.strftime('%m-%d-%Y')
+    join_date.short_description = _('Join Date')
+    join_date.admin_order_field = 'join_dt'
+
+    def renew_date(self, instance):
+        if not instance.renew_dt:
+            return ''
+        return instance.renew_dt.strftime('%m-%d-%Y')
+    renew_date.short_description = _('Renew Date')
+    renew_date.admin_order_field = 'renew_dt'
+
+    def expire_date(self, instance):
+        if not instance.expiration_dt:
+            return ''
+        return instance.expiration_dt.strftime('%m-%d-%Y')
+    expire_date.short_description = _('Expiration Date')
+    expire_date.admin_order_field = 'expiration_dt'
+
+    @mark_safe
+    def edit_link(self, instance):
+        return '<a href="%s">%s</a>' % (
+                    reverse('corpmembership.edit',args=[instance.id]),
+                    _('Edit'),)
+    edit_link.short_description = _('edit')
+
+    @mark_safe
+    def roster_link(self, instance):
+        return '<a href="%s?cm_id=%d">%s</a>' % (
+                    reverse('corpmembership.roster_search'),
+                    instance.id,
+                    _('Roster'),)
+    roster_link.short_description = _('Roster')
+
+    def display_reps(self, reps):
+        reps_display = ''
+        for i, rep in enumerate(reps):
+            if i > 0:
+                reps_display += '<br />'
+            reps_display += '<a href="%s">%s</a> ' % (
+                        reverse('profile',args=[rep.user.username]),
+                        rep.user.get_full_name() or rep.user.username)
+
+            if rep.user.email:
+                reps_display += rep.user.email
+        return reps_display
+
+    @mark_safe
+    def dues_reps(self, instance):
+        reps = instance.corp_profile.reps.filter(is_dues_rep=True)
+        return self.display_reps(reps)
+    dues_reps.short_description = _('Dues Reps')
+
+    @mark_safe
+    def member_reps(self, instance):
+        reps = instance.corp_profile.reps.filter(is_member_rep=True)
+        return self.display_reps(reps)
+    member_reps.short_description = _('Member Reps')
+
+    @mark_safe
     def invoice_url(self, instance):
         invoice = instance.invoice
         if invoice:
@@ -183,7 +331,6 @@ class CorpMembershipAdmin(admin.ModelAdmin):
                 )
         return ""
     invoice_url.short_description = u'Invoice'
-    invoice_url.allow_tags = True
 
     def add_view(self, request, form_url='', extra_context=None):
         return HttpResponseRedirect(reverse('corpmembership.add'))
@@ -203,12 +350,12 @@ class CorpMembershipAdmin(admin.ModelAdmin):
 
 
 class NoticeAdmin(admin.ModelAdmin):
+    @mark_safe
     def notice_log(self):
         if self.notice_time == 'attimeof':
             return '--'
         return '<a href="%s%s?notice_id=%d">View logs</a>' % (get_setting('site', 'global', 'siteurl'),
                          reverse('corporate_membership.notice.log.search'), self.id)
-    notice_log.allow_tags = True
 
     list_display = ['id', 'notice_name', notice_log, 'content_type',
                      'corporate_membership_type', 'status_detail']
@@ -226,7 +373,7 @@ class NoticeAdmin(admin.ModelAdmin):
     class Media:
         js = (
             "//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js",
-            '%sjs/global/tinymce.event_handlers.js' % settings.STATIC_URL,
+            static('js/global/tinymce.event_handlers.js'),
         )
 
     def save_model(self, request, object, form, change):
@@ -251,11 +398,11 @@ class NoticeAdmin(admin.ModelAdmin):
 
     def get_urls(self):
         urls = super(NoticeAdmin, self).get_urls()
-        extra_urls = patterns('',
-            url("^clone/(?P<pk>\d+)/$",
+        extra_urls = [
+            url(r'^clone/(?P<pk>\d+)/$',
                 self.admin_site.admin_view(self.clone),
                 name='corporate_membership_notice.admin_clone'),
-        )
+        ]
         return extra_urls + urls
 
     def clone(self, request, pk):
@@ -325,7 +472,7 @@ class CorpMembershipAppField2Admin(admin.ModelAdmin):
         js = (
             "//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js",
             '//ajax.googleapis.com/ajax/libs/jqueryui/1.11.0/jquery-ui.min.js',
-            '%sjs/admin/admin-list-reorder.js' % settings.STATIC_URL,
+            static('js/admin/admin-list-reorder.js'),
         )
 
     def get_fieldsets(self, request, obj=None):
@@ -382,8 +529,8 @@ class CorpMembershipAppField2Admin(admin.ModelAdmin):
                 model_name = opts_.model_name
 
             msg = _('The %(name)s "%(obj)s" was changed successfully.') % {
-                        'name': force_unicode(verbose_name),
-                        'obj': force_unicode(obj)}
+                        'name': force_text(verbose_name),
+                        'obj': force_text(obj)}
             self.message_user(request, msg)
             post_url = '%s?corp_app_id=%d' % (
                             reverse('admin:%s_%s_changelist' %
@@ -395,11 +542,109 @@ class CorpMembershipAppField2Admin(admin.ModelAdmin):
             return super(CorpMembershipAppField2Admin, self).response_change(request, obj)
 
 
-class CorpProfileAdmin(admin.ModelAdmin):
-    model = CorpProfile
+class CorpMembershipRepInlineAdmin(admin.TabularInline):
+    model = CorpMembershipRep
+    fields = ('user', 'is_dues_rep', 'is_member_rep')
+    extra = 0
+    raw_id_fields = ("user",)
+    verbose_name = _('Representative')
+    verbose_name_plural = _('Representatives')
+    ordering = ("user",)
+
+
+class CorpMembershipInlineAdmin(admin.TabularInline):
+    model = CorpMembership
+    fields = ('corporate_membership_type',
+              'join_dt',
+              'renewal', 'renew_dt',
+              'expiration_dt',
+              'status_detail')
+    readonly_fields=('corporate_membership_type',
+                     'join_dt',
+                      'renewal', 'renew_dt',
+                      'expiration_dt',
+                      'status_detail')
+    extra = 0
+    can_delete = False
+    ordering = ("-create_dt", '-expiration_dt')
 
     def has_add_permission(self, request):
         return False
+
+
+class CorpProfileAdmin(TendenciBaseModelAdmin):
+    model = CorpProfile
+    list_display = ['name',]
+    search_fields = ('name',)
+    inlines = (CorpMembershipRepInlineAdmin, CorpMembershipInlineAdmin)
+    fieldsets = [(_('Company Details'), {
+                      'fields': ('name',
+                                 'logo_file',
+                                 'url',
+                                 'number_employees',
+                                 'phone',
+                                 'email',
+                                 'address',
+                                 'address2',
+                                 'city',
+                                 'state',
+                                 'zip',
+                                 'country',
+                                 'entity'),
+                      }),
+                      (_('Parent Entity'), {
+                       'fields': ('parent_entity',),
+                       'classes': ('boxy-grey',),
+                      }),
+                     (_('Other Info'), {'fields': (
+                            'description',
+                            'notes',
+                        )}),]
+
+    form = CorpProfileAdminForm
+
+    def has_add_permission(self, request):
+        return False
+
+
+class CorpMembershipRepAdmin(admin.ModelAdmin):
+    model = CorpMembershipRep
+    list_display = ['id', 'profile', 'rep_name', 'rep_email',
+                    'is_dues_rep', 'is_member_rep']
+    list_filter = ['is_dues_rep', 'is_member_rep']
+
+    ordering = ['corp_profile']
+
+    def get_queryset(self, request):
+        """
+        Excludes those associated with the deleted corp profiles
+        """
+        return super(CorpMembershipRepAdmin, self).get_queryset(request
+                    ).filter(corp_profile__status=True)
+    
+    @mark_safe
+    def profile(self, instance):
+        return '<a href="%s">%s</a>' % (
+              reverse('admin:corporate_memberships_corpprofile_change',
+                      args=[instance.corp_profile.id]),
+              instance.corp_profile.name,)
+    profile.short_description = _('Corp Profile')
+    profile.admin_order_field = 'corp_profile__name'
+
+    @mark_safe
+    def rep_name(self, instance):
+        return '<a href="{0}">{1}</a>'.format(
+                reverse('profile', args=[instance.user.username]),
+                instance.user.get_full_name() or instance.user.username,
+
+            )
+    rep_name.short_description = u'Rep Name'
+    rep_name.admin_order_field = 'user__first_name'
+
+    def rep_email(self, instance):
+        return instance.user.email
+    rep_email.short_description = u'Rep Email'
+    rep_email.admin_order_field = 'user__email'
 
 
 admin.site.register(CorpMembership, CorpMembershipAdmin)
@@ -408,3 +653,4 @@ admin.site.register(CorpMembershipApp, CorpMembershipAppAdmin)
 admin.site.register(CorpMembershipAppField, CorpMembershipAppField2Admin)
 admin.site.register(Notice, NoticeAdmin)
 admin.site.register(CorpProfile, CorpProfileAdmin)
+admin.site.register(CorpMembershipRep, CorpMembershipRepAdmin)

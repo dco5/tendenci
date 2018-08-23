@@ -2,174 +2,143 @@
 Wrapper for loading template based on a selected Theme.
 """
 import os
+import errno
 
 from django.conf import settings
 from django.template import TemplateDoesNotExist
-from django.template.loader import BaseLoader
-from django.template import engines
-engine = engines['django'].engine
-find_template_loader = engine.find_template_loader
-get_template_from_string = engine.from_string
-make_origin = engine.make_origin
+from django.template.base import Origin
+from django.template.loaders.base import Loader as DjangoLoader
+from django.template.loaders.cached import Loader as DjangoCachedLoader
 
 from django.utils._os import safe_join
 from django.core.cache import cache
-from django.utils.translation import ugettext_lazy as _
 from django.core.exceptions import SuspiciousFileOperation
 
-from tendenci.libs.boto_s3.utils import read_theme_file_from_s3
-from tendenci.apps.theme.utils import get_theme_root
+from tendenci.apps.theme.utils import (get_active_theme, get_theme,
+                                       get_theme_search_order, is_builtin_theme,
+                                       get_theme_root)
 from tendenci.apps.theme.middleware import get_current_request
+from tendenci.libs.boto_s3.utils import read_theme_file_from_s3
 
-non_theme_source_loaders = None
 
-
-class Loader(BaseLoader):
-    """Loader that includes a theme's templates files that enables
-    template overriding similar to how a project's templates dir overrides
-    an app's templates dir. In other words this takes advantage of django's
-    template prioritization.
-    Notes:
-    This takes into account the ACTIVE THEME only.
-    The other themes are still available but must be accessed in a
-    different manner. Look into theme's theme_tags.py and shorcuts.py
-    Since the context is not available. We will be unable to mark if
-    a template is custom from here.
+class ThemeLoader(DjangoLoader):
     """
-    is_usable = True
+    Loader that searches for templates in Tendenci themes.  This can be used to
+    override both the project's templates dir and the app templates dirs using
+    themes.
+    """
 
-    def __init__(self, *args, **kwargs):
-        """
-        Hold the theme_root in self.theme_root instead of calling get_theme_root()
-        in get_template_sources(). This significantly reduces the number of queries
-        for get_setting('module', 'theme_editor', 'theme').
-        (reduced # of queries from 3316 to 233 when testing on my local for an
-        article view. - @jennyq)
-        """
-        self.theme_root = get_theme_root()
-        super(Loader, self).__init__(engine)
+    def __init__(self, engine, *args, **kwargs):
+        self.cached_theme_search_info = (None, None)
+        super(ThemeLoader, self).__init__(engine)
 
     def get_template_sources(self, template_name, template_dirs=None):
-        """Return the absolute paths to "template_name", when appended to the
-        selected theme directory in THEMES_DIR.
-        Any paths that don't lie inside one of the
-        template dirs are excluded from the result set, for security reasons.
         """
-        theme_templates = []
-        current_request = get_current_request()
-        # this is needed when the theme is changed
-        self.theme_root = get_theme_root()
-        if current_request and current_request.mobile:
-            theme_templates.append(os.path.join(self.theme_root, 'mobile'))
-        theme_templates.append(os.path.join(self.theme_root, 'templates'))
+        Return possible absolute paths to "template_name" in the current theme
+        and any themes it inherits from.
+        Any paths that don't lie inside one of the template dirs are excluded
+        from the result set for security reasons.
+        """
+        request = get_current_request()
+        mobile = (request and request.mobile)
 
-        for template_path in theme_templates:
-            try:
-                if settings.USE_S3_THEME:
-                    yield os.path.join(template_path, template_name)
+        active_theme = get_active_theme()
+        theme = get_theme(active_theme)
+        cached_theme, theme_search_info = self.cached_theme_search_info
+
+        # If the theme changed or the user is previewing a different theme,
+        # recalculate theme_search_info.
+        # Note that this Loader instance may be shared between multiple threads,
+        # so you must be careful when reading/writing
+        # self.cached_theme_search_info to ensure that writes in one thread
+        # cannot cause unexpected behavior in another thread that is
+        # reading/writing self.cached_theme_search_info at the same time.
+        if cached_theme != theme:
+            theme_search_info = []
+            for cur_theme in get_theme_search_order(theme):
+                if is_builtin_theme(cur_theme) or not settings.USE_S3_THEME:
+                    theme_search_info.append((cur_theme, get_theme_root(cur_theme), False))
                 else:
-                    yield safe_join(template_path, template_name)
-            except SuspiciousFileOperation:
-                # The joined path was located outside of this particular
-                # template_dir (it might be inside another one, so this isn't
-                # fatal).
-                pass
+                    theme_search_info.append((cur_theme, cur_theme, True))
+            if theme == active_theme:
+                self.cached_theme_search_info = (theme, theme_search_info)
 
-    def load_template_source(self, template_name, template_dirs=None):
-        tried = []
-
-        for filepath in self.get_template_sources(template_name, template_dirs):
-            # First try to read from S3
-            if settings.USE_S3_THEME:
-                # first try to read from cache
-                cache_key = ".".join([settings.SITE_CACHE_KEY, "theme", filepath])
-                cached_template = cache.get(cache_key)
-                if cached_template == "tried":
-                    # Skip out of this on to the next template file
-                    continue
-                if cached_template:
-                    return (cached_template, filepath)
-
-                try:
-                    file = read_theme_file_from_s3(filepath)
+        for cur_theme, cur_theme_root, use_s3_theme in theme_search_info:
+            for template_path in (['mobile', 'templates'] if mobile else ['templates']):
+                if not use_s3_theme:
                     try:
-                        cache.set(cache_key, file)
-                        cache_group_key = "%s.theme_files_cache_list" % settings.SITE_CACHE_KEY
-                        cache_group_list = cache.get(cache_group_key)
+                        template_file = safe_join(cur_theme_root, template_path, template_name)
+                    except SuspiciousFileOperation:
+                        # The joined path was located outside of template_path,
+                        # although it might be inside another one, so this isn't
+                        # fatal.
+                        continue
+                else:
+                    template_file = os.path.join(cur_theme_root, template_path, template_name)
+                origin = Origin(name=template_file, template_name=template_name, loader=self)
+                origin.theme = cur_theme
+                origin.use_s3_theme = use_s3_theme
+                yield origin
 
-                        if cache_group_list is None:
-                            cache.set(cache_group_key, [cache_key])
-                        else:
-                            cache_group_list += [cache_key]
-                            cache.set(cache_group_key, cache_group_list)
+    def get_contents(self, origin):
+        if not origin.use_s3_theme:
+            try:
+                with open(origin.name) as fp:
+                    return fp.read()
+            # Python 3 only
+            #except FileNotFoundError:
+            #    raise TemplateDoesNotExist(origin)
+            # Python 2 and 3
+            except IOError as e:
+                if e.errno == errno.ENOENT:
+                    raise TemplateDoesNotExist(origin)
+                raise
 
-                        return (file, filepath)
-                    finally:
-                        pass
-                except:
-                    # Cache that we tried this file
-                    cache.set(cache_key, "tried")
-
-            # Otherwise, look on to local file system.
-            else:
-                #print filepath
-                try:
-                    file = open(filepath)
-                    try:
-                        return (file.read().decode(settings.FILE_CHARSET), filepath)
-                    finally:
-                        file.close()
-                except IOError:
-                    tried.append(filepath)
-        if tried:
-            error_msg = "Tried %s" % tried
         else:
-            error_msg = "Your TEMPLATE_DIRS setting is empty. Change it to point to at least one template directory."
-        raise TemplateDoesNotExist(_(error_msg))
-    load_template_source.is_usable = True
+            cache_key = ".".join([settings.SITE_CACHE_KEY, "theme", origin.name])
 
-_loader = Loader()
+            cached_template = cache.get(cache_key)
+            if cached_template == "tried":
+                raise TemplateDoesNotExist(origin)
+            if cached_template:
+                return cached_template
+
+            try:
+                template = read_theme_file_from_s3(origin.name)
+            except:
+                # Cache that we tried this file
+                cache.set(cache_key, "tried")
+                raise TemplateDoesNotExist(origin)
+            cache.set(cache_key, template)
+
+            cache_group_key = "%s.theme_files_cache_list" % settings.SITE_CACHE_KEY
+            cache_group_list = cache.get(cache_group_key)
+            if cache_group_list is None:
+                cache.set(cache_group_key, [cache_key])
+            else:
+                cache_group_list += [cache_key]
+                cache.set(cache_group_key, cache_group_list)
+
+            return template
 
 
-def load_template_source(template_name, template_dirs=None):
-    # For backwards compatibility
-    return _loader.load_template_source(template_name, template_dirs)
-load_template_source.is_usable = True
-
-
-def find_default_template(name, dirs=None):
+class CachedLoader(DjangoCachedLoader):
     """
-    Exclude the theme.template_loader
-    So we can properly get the templates not part of any theme.
+    Wrapper around django.template.loaders.cached.Loader which allows caching to
+    be disabled on a per-request basis.  This is used to support theme previews.
     """
-    # Calculate template_source_loaders the first time the function is executed
-    # because putting this logic in the module-level namespace may cause
-    # circular import errors. See Django ticket #1292.
-    global non_theme_source_loaders
-    if non_theme_source_loaders is None:
-        loaders = []
-        for loader_name in settings.TEMPLATE_LOADERS:
-            if loader_name != 'theme.template_loaders.load_template_source':
-                loader = find_template_loader(loader_name)
-                if loader is not None:
-                    loaders.append(loader)
-        non_theme_source_loaders = tuple(loaders)
-    for loader in non_theme_source_loaders:
-        try:
-            source, display_name = loader(name, dirs)
-            return (source, make_origin(display_name, loader, name, dirs))
-        except TemplateDoesNotExist:
-            pass
-    raise TemplateDoesNotExist(name)
 
+    def get_template(self, *args, **kwargs):
+        request = get_current_request()
+        disable_cache = (request and 'theme' in request.session)
 
-def get_default_template(template_name):
-    """
-    Returns a compiled Template object for the given template name,
-    handling template inheritance recursively.
-    """
-    template, origin = find_default_template(template_name)
-    if not hasattr(template, 'render'):
-        # template needs to be compiled
-        template = get_template_from_string(template, origin, template_name)
-    return template
+        if not disable_cache:
+            return super(CachedLoader, self).get_template(*args, **kwargs)
+
+        # django.template.loaders.cached.Loader calls super().get_template()
+        # (where super is django.template.loaders.base.Loader) to get templates
+        # that are not in the cache.  To skip the cache, we do the same, except
+        # we must call django.template.loaders.base.Loader directly instead of
+        # using super() since super is django.template.loaders.cached.Loader in
+        # this case.
+        return DjangoLoader.get_template(self, *args, **kwargs)

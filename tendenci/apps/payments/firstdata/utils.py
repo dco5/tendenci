@@ -3,9 +3,9 @@
 from datetime import datetime
 from django.conf import settings
 #from django.http import Http404
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.db import transaction
-from forms import FirstDataPaymentForm
+from .forms import FirstDataPaymentForm
 from tendenci.apps.payments.models import Payment
 from tendenci.apps.payments.utils import payment_processing_object_updates
 from tendenci.apps.payments.utils import log_payment, send_payment_notice
@@ -33,9 +33,9 @@ def prepare_firstdata_form(request, payment):
 
     # SHA1 hash
     #s = '%s%s%s%s%s' % (settings.MERCHANT_LOGIN, txndatetime, chargetotal, currency, settings.MERCHANT_TXN_KEY)
-    #hash = hashlib.sha1(s).hexdigest()
+    #hash = hashlib.sha1(s.encode()).hexdigest()
 
-    if request.user.is_authenticated():
+    if request.user.is_authenticated:
         userid = request.user.id
     else:
         userid = 0

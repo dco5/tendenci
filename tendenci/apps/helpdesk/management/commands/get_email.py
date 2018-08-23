@@ -10,6 +10,7 @@ scripts/get_email.py - Designed to be run from cron, this script checks the
                        adding to existing tickets if needed)
 """
 from __future__ import print_function
+from builtins import str
 
 import email
 import imaplib
@@ -21,8 +22,7 @@ import chardet
 
 from datetime import timedelta
 from email.header import decode_header
-from email.Utils import parseaddr, collapse_rfc2231_value
-from optparse import make_option
+from email.utils import parseaddr, collapse_rfc2231_value
 
 from email_reply_parser import EmailReplyParser
 
@@ -32,8 +32,7 @@ from django.db.models import Q
 from django.utils.translation import ugettext as _
 from django.template.defaultfilters import striptags
 from django.utils.encoding import DjangoUnicodeDecodeError
-from HTMLParser import HTMLParser
-unescape = HTMLParser().unescape
+from six.moves.html_parser import HTMLParser
 from tendenci.apps.helpdesk import settings
 
 try:
@@ -44,20 +43,18 @@ except ImportError:
 from tendenci.apps.helpdesk.lib import send_templated_mail, safe_template_context
 from tendenci.apps.helpdesk.models import Queue, Ticket, FollowUp, Attachment, IgnoreEmail
 
+unescape = HTMLParser().unescape
+
 
 class Command(BaseCommand):
-    def __init__(self):
-        BaseCommand.__init__(self)
+    help = 'Process Jutda Helpdesk queues and process e-mails via POP3/IMAP as required, feeding them into the helpdesk.'
 
-        self.option_list += (
-            make_option(
+    def add_arguments(self, parser):
+            parser.add_argument(
                 '--quiet', '-q',
                 default=False,
                 action='store_true',
-                help='Hide details about each queue/message as they are processed'),
-            )
-
-    help = 'Process Jutda Helpdesk queues and process e-mails via POP3/IMAP as required, feeding them into the helpdesk.'
+                help='Hide details about each queue/message as they are processed')
 
     def handle(self, *args, **options):
         quiet = options.get('quiet', False)
@@ -103,8 +100,6 @@ def process_queue(q, quiet=False):
 
         socks.set_default_proxy(proxy_type=proxy_type, addr=q.socks_proxy_host, port=q.socks_proxy_port)
         socket.socket = socks.socksocket
-    else:
-        socket.socket = socket._socketobject
 
     email_box_type = settings.QUEUE_EMAIL_BOX_TYPE if settings.QUEUE_EMAIL_BOX_TYPE else q.email_box_type
 
@@ -125,7 +120,7 @@ def process_queue(q, quiet=False):
 
         for msg in messagesInfo:
             msgNum = msg.split(" ")[0]
-            msgSize = msg.split(" ")[1]
+            #msgSize = msg.split(" ")[1]
 
             full_message = "\n".join(server.retr(msgNum)[1])
             ticket = ticket_from_message(message=full_message, queue=q, quiet=quiet)
@@ -161,21 +156,24 @@ def process_queue(q, quiet=False):
 
 
 def decodeUnknown(charset, string):
-    if not charset:
-        try:
-            return string.decode('utf-8','ignore')
-        except:
-            return string.decode('iso8859-1','ignore')
-    return unicode(string, charset)
+    if type(string) is not str:
+        if not charset:
+            try:
+                return str(string, encoding='utf-8', errors='replace')
+            except UnicodeError:
+                return str(string, encoding='iso8859-1', errors='replace')
+        return str(string, encoding=charset, errors='replace')
+    return string
 
 def decode_mail_headers(string):
-    decoded = decode_header(string)
-    return u' '.join([unicode(msg, charset or 'utf-8') for msg, charset in decoded])
+    decoded = email.header.decode_header(string)
+    return u' '.join([str(msg, encoding=charset, errors='replace') if charset else str(msg) for msg, charset in decoded])
+    
 
 def ticket_from_message(message, queue, quiet):
     # 'message' must be an RFC822 formatted message.
     msg = message
-    message = email.message_from_string(msg)
+    message = email.message_from_string(msg.decode('utf-8'))
     subject = message.get('subject', _('Created from e-mail'))
     subject = decode_mail_headers(decodeUnknown(message.get_charset(), subject))
     subject = subject.replace("Re: ", "").replace("Fw: ", "").replace("RE: ", "").replace("FW: ", "").replace("Automatic reply: ", "").strip()
@@ -195,7 +193,7 @@ def ticket_from_message(message, queue, quiet):
                 return False
             return True
 
-    matchobj = re.match(r".*\["+queue.slug+"-(?P<id>\d+)\]", subject)
+    matchobj = re.match(r'.*\['+re.escape(queue.slug)+r'-(?P<id>\d+)\]', subject)
     if matchobj:
         # This is a reply or forward.
         ticket = matchobj.group('id')
@@ -217,7 +215,7 @@ def ticket_from_message(message, queue, quiet):
             if part.get_content_subtype() == 'plain':
                 body_plain = EmailReplyParser.parse_reply(decodeUnknown(part.get_content_charset(), part.get_payload(decode=True)))
             else:
-                body_html = part.get_payload(decode=True)
+                body_html = decodeUnknown(part.get_content_charset(), part.get_payload(decode=True))
                 # make plain text more legible when viewing the ticket
                 body_html, n = re.subn(r'[\r\n]+', r'', body_html)
                 body_html, n = re.subn(r'\>\s+\<', r'><', body_html)
@@ -236,9 +234,9 @@ def ticket_from_message(message, queue, quiet):
                 try:
                     # strip html tags
                     body_plain = striptags(body_html)
-                except DjangoUnicodeDecodeError as e:
+                except DjangoUnicodeDecodeError:
                     charset = chardet.detect(body_html)['encoding']
-                    body_plain = striptags(unicode(body_html, charset))
+                    body_plain = striptags(str(body_html, charset))
 
                 body_plain = unescape(body_plain)
         else:
@@ -299,7 +297,7 @@ def ticket_from_message(message, queue, quiet):
         )
         t.save()
         new = True
-        update = ''
+        #update = ''
 
     elif t.status == Ticket.CLOSED_STATUS:
         t.status = Ticket.REOPENED_STATUS
@@ -324,8 +322,8 @@ def ticket_from_message(message, queue, quiet):
 
     for file in files:
         if file['content']:
-            filename = file['filename'].encode('ascii', 'replace').replace(' ', '_')
-            filename = re.sub('[^a-zA-Z0-9._-]+', '', filename)
+            filename = file['filename'].replace(' ', '_')
+            filename = re.sub(r'[^a-zA-Z0-9._-]+', '', filename)
             a = Attachment(
                 followup=f,
                 filename=filename,
@@ -371,10 +369,10 @@ def ticket_from_message(message, queue, quiet):
     else:
         context.update(comment=f.comment)
 
-        if t.status == Ticket.REOPENED_STATUS:
-            update = _(' (Reopened)')
-        else:
-            update = _(' (Updated)')
+        #if t.status == Ticket.REOPENED_STATUS:
+        #    update = _(' (Reopened)')
+        #else:
+        #    update = _(' (Updated)')
 
         if t.assigned_to:
             send_templated_mail(

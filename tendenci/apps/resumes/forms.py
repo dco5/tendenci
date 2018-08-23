@@ -10,7 +10,6 @@ from django.utils.translation import ugettext_lazy as _
 from tendenci.apps.resumes.models import Resume
 from tendenci.apps.perms.forms import TendenciBaseForm
 from tendenci.libs.tinymce.widgets import TinyMCE
-from tendenci.apps.base.fields import SplitDateTimeField
 from tendenci.apps.base.fields import EmailVerificationField, CountrySelectField
 from tendenci.apps.base.forms import CustomCatpchaField
 
@@ -52,10 +51,10 @@ class ResumeForm(TendenciBaseForm):
     contact_email = EmailVerificationField(label=_("Contact email"), required=False)
     contact_country = CountrySelectField(label=_("Contact country"), required=False)
 
-    activation_dt = SplitDateTimeField(label=_('Activation Date/Time'),
+    activation_dt = forms.SplitDateTimeField(label=_('Activation Date/Time'),
         initial=datetime.now())
 
-    expiration_dt = SplitDateTimeField(label=_('Expriation Date/Time'),
+    expiration_dt = forms.SplitDateTimeField(label=_('Expriation Date/Time'),
         initial=(datetime.now() + timedelta(days=30)))
 
     syndicate = forms.BooleanField(label=_('Include in RSS Feed'), required=False, initial=True)
@@ -166,7 +165,7 @@ class ResumeForm(TendenciBaseForm):
 
         # adjust fields depending on user status
         fields_to_pop = []
-        if not self.user.is_authenticated():
+        if not self.user.is_authenticated:
             fields_to_pop += [
                 'allow_anonymous_view',
                 'user_perms',

@@ -4,13 +4,14 @@ from django.conf import settings
 from django.shortcuts import get_object_or_404, redirect
 from django.contrib import messages
 from django.contrib.admin import SimpleListFilter
-from django.conf.urls import patterns, url
+from django.conf.urls import url
 from django.template.defaultfilters import slugify
 from django.utils.encoding import iri_to_uri
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.http import HttpResponseRedirect
 from django.utils.translation import ugettext_lazy as _
-from django.utils.encoding import force_unicode
+from django.utils.encoding import force_text
+from django.utils.safestring import mark_safe
 
 from tendenci.apps.base.http import Http403
 from tendenci.apps.memberships.forms import MembershipTypeForm
@@ -27,6 +28,7 @@ from tendenci.apps.memberships.utils import get_selected_demographic_field_names
 from tendenci.apps.memberships.middleware import ExceededMaxTypes
 from tendenci.apps.site_settings.utils import get_setting
 from tendenci.apps.perms.utils import has_perm
+from tendenci.apps.theme.templatetags.static import static
 
 
 class MembershipStatusDetailFilter(SimpleListFilter):
@@ -36,7 +38,7 @@ class MembershipStatusDetailFilter(SimpleListFilter):
     def lookups(self, request, model_admin):
         memberships = model_admin.model.objects.exclude(status_detail='archive')
         status_detail_list = set([m.status_detail for m in memberships])
-        return zip(status_detail_list, status_detail_list)
+        return list(zip(status_detail_list, status_detail_list))
 
     def queryset(self, request, queryset):
 
@@ -47,29 +49,29 @@ class MembershipStatusDetailFilter(SimpleListFilter):
             return queryset.filter(status_detail=self.value())
         else:
             return queryset
-        
+
 class MembershipAutoRenewFilter(SimpleListFilter):
     title = 'auto renew'
     parameter_name = 'auto_renew'
- 
+
     def lookups(self, request, model_admin):
         return (
             (1, 'Yes'),
             (0, 'No'),
         )
- 
+
     def queryset(self, request, queryset):
         try:
             value = int(self.value())
         except:
             value = None
-        
-        if value == None:
+
+        if value is None:
             return queryset
-        
+
         if value == 1:
             return queryset.filter(auto_renew=True)
-        
+
         return queryset.filter(Q(auto_renew=False) | Q(auto_renew__isnull=True))
 
 
@@ -132,7 +134,7 @@ def disapprove_selected(modeladmin, request, queryset):
     qs_pending = Q(status_detail='pending')
     qs_active = Q(status_detail='active')
 
-    memberships = queryset.filter(qs_pending, qs_active)
+    memberships = queryset.filter(qs_pending | qs_active)
 
     for membership in memberships:
         is_renewal = membership.is_renewal()
@@ -174,7 +176,7 @@ class MembershipDefaultAdmin(admin.ModelAdmin):
         {'fields': (
             ('first_name', 'last_name'),
             ('email', 'email2'),
-            ('company', 'department'), ('position_title',),
+            ('company', 'department'), ('position_title', 'education'),
             ('address', 'address2'), ('address_type',),
             ('city', 'state'), ('zipcode', 'country'),
             ('phone', 'phone2'),
@@ -347,6 +349,7 @@ class MembershipDefaultAdmin(admin.ModelAdmin):
     get_status.short_description = u'Status'
     get_status.admin_order_field = 'status_detail'
 
+    @mark_safe
     def get_invoice(self, instance):
         inv = instance.get_invoice()
         if inv:
@@ -363,7 +366,6 @@ class MembershipDefaultAdmin(admin.ModelAdmin):
                 )
         return ""
     get_invoice.short_description = u'Invoice'
-    get_invoice.allow_tags = True
 
     def get_create_dt(self, instance):
         return instance.create_dt.strftime('%b %d, %Y, %I:%M %p')
@@ -427,8 +429,8 @@ class MembershipDefaultAdmin(admin.ModelAdmin):
         When the change page is submitted we can redirect
         to a URL specified in the next parameter.
         """
-        POST_KEYS = request.POST.keys()
-        GET_KEYS = request.GET.keys()
+        POST_KEYS = request.POST
+        GET_KEYS = request.GET
         NEXT_URL = iri_to_uri('%s') % request.GET.get('next')
 
         do_next_url = (
@@ -451,21 +453,20 @@ class MembershipDefaultAdmin(admin.ModelAdmin):
         """
         urls = super(MembershipDefaultAdmin, self).get_urls()
 
-        extra_urls = patterns(
-            u'',
-            url("^approve/(?P<pk>\d+)/$",
+        extra_urls = [
+            url(r'^approve/(?P<pk>\d+)/$',
                 self.admin_site.admin_view(self.approve),
                 name='membership.admin_approve'),
-            url("^renew/(?P<pk>\d+)/$",
+            url(r'^renew/(?P<pk>\d+)/$',
                 self.admin_site.admin_view(self.renew),
                 name='membership.admin_renew'),
-            url("^disapprove/(?P<pk>\d+)/$",
+            url(r'^disapprove/(?P<pk>\d+)/$',
                 self.admin_site.admin_view(self.disapprove),
                 name='membership.admin_disapprove'),
-            url("^expire/(?P<pk>\d+)/$",
+            url(r'^expire/(?P<pk>\d+)/$',
                 self.admin_site.admin_view(self.expire),
                 name='membership.admin_expire'),
-        )
+        ]
         return extra_urls + urls
 
     # django-admin custom views ----------------------------------------
@@ -609,12 +610,12 @@ class MembershipAppAdmin(admin.ModelAdmin):
         js = (
             '//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js',
             '//ajax.googleapis.com/ajax/libs/jqueryui/1.11.0/jquery-ui.min.js',
-            '%sjs/admin/membapp_tabular_inline_ordering.js' % settings.STATIC_URL,
-            '%sjs/global/tinymce.event_handlers.js' % settings.STATIC_URL,
-            '%sjs/tax_fields.js' % settings.STATIC_URL,
+            static('js/admin/membapp_tabular_inline_ordering.js'),
+            static('js/global/tinymce.event_handlers.js'),
+            static('js/tax_fields.js'),
         )
-        css = {'all': ['%scss/admin/dynamic-inlines-with-sort.css' % settings.STATIC_URL,
-                       '%scss/memberships-admin.css' % settings.STATIC_URL], }
+        css = {'all': [static('css/admin/dynamic-inlines-with-sort.css'),
+                       static('css/memberships-admin.css')], }
 
 
 class MembershipTypeAdmin(TendenciBaseModelAdmin):
@@ -654,18 +655,18 @@ class MembershipTypeAdmin(TendenciBaseModelAdmin):
 
     class Media:
         js = ('//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js',
-              "%sjs/membtype.js" % settings.STATIC_URL,)
+              static('js/membtype.js'),)
 
+    @mark_safe
     def show_group(self, instance):
         if instance.group:
             return '<a href="{0}" title="{1}">{1} (id: {2})</a>'.format(
                     reverse('group.detail', args=[instance.group.slug]),
                     instance.group,
-                    instance.group.id
+                    instance.group.id,
                 )
         return ""
     show_group.short_description = u'Group'
-    show_group.allow_tags = True
     show_group.admin_order_field = 'group'
 
     def save_model(self, request, object, form, change):
@@ -677,7 +678,7 @@ class MembershipTypeAdmin(TendenciBaseModelAdmin):
         for i, field in enumerate(form.type_exp_method_fields):
             if field == 'fixed_option2_can_rollover':
                 if type_exp_method_list[i] == '':
-                    type_exp_method_list[i] = ''
+                    type_exp_method_list[i] = False
             else:
                 if type_exp_method_list[i] == '':
                     type_exp_method_list[i] = "0"
@@ -733,10 +734,10 @@ class MembershipTypeAdmin(TendenciBaseModelAdmin):
 
 
 class NoticeAdmin(admin.ModelAdmin):
+    @mark_safe
     def notice_log(self):
         return '<a href="%s%s?notice_id=%d">View logs</a>' % (get_setting('site', 'global', 'siteurl'),
                          reverse('membership.notice.log.search'), self.id)
-    notice_log.allow_tags = True
 
     list_display = ['id', 'notice_name', notice_log, 'content_type',
                      'membership_type', 'status', 'status_detail']
@@ -754,8 +755,8 @@ class NoticeAdmin(admin.ModelAdmin):
     class Media:
         js = (
             '//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js',
-            '%sjs/global/tinymce.event_handlers.js' % settings.STATIC_URL,
-            '%sjs/admin/membnotices.js' % settings.STATIC_URL,
+            static('js/global/tinymce.event_handlers.js'),
+            static('js/admin/membnotices.js'),
         )
 
     def save_model(self, request, object, form, change):
@@ -780,11 +781,11 @@ class NoticeAdmin(admin.ModelAdmin):
 
     def get_urls(self):
         urls = super(NoticeAdmin, self).get_urls()
-        extra_urls = patterns('',
-            url("^clone/(?P<pk>\d+)/$",
+        extra_urls = [
+            url(r'^clone/(?P<pk>\d+)/$',
                 self.admin_site.admin_view(self.clone),
                 name='membership_notice.admin_clone'),
-        )
+        ]
         return extra_urls + urls
 
     def clone(self, request, pk):
@@ -855,7 +856,7 @@ class MembershipAppField2Admin(admin.ModelAdmin):
         js = (
             '//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js',
             '//ajax.googleapis.com/ajax/libs/jqueryui/1.11.0/jquery-ui.min.js',
-            '%sjs/admin/admin-list-reorder.js' % settings.STATIC_URL,
+            static('js/admin/admin-list-reorder.js'),
         )
 
     def get_fieldsets(self, request, obj=None):
@@ -912,8 +913,8 @@ class MembershipAppField2Admin(admin.ModelAdmin):
                 module_name = opts_.model_name
 
             msg = _('The %(name)s "%(obj)s" was changed successfully.') % {
-                        'name': force_unicode(verbose_name),
-                        'obj': force_unicode(obj)}
+                        'name': force_text(verbose_name),
+                        'obj': force_text(obj)}
             self.message_user(request, msg)
             post_url = '%s?membership_app_id=%d' % (
                             reverse('admin:%s_%s_changelist' %

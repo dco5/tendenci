@@ -1,10 +1,13 @@
+from builtins import str
 import uuid
 from hashlib import md5
 import operator
 from datetime import datetime, timedelta
+from functools import reduce
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
+from django.urls import reverse
 from django.db.models.aggregates import Sum
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.auth.models import User
@@ -15,7 +18,8 @@ from django.contrib.contenttypes.fields import GenericRelation
 from django.db.models import Q
 
 from tagging.fields import TagField
-from timezones.fields import TimeZoneField
+from timezone_field import TimeZoneField
+
 from tendenci.apps.events.managers import EventManager, RegistrantManager, EventTypeManager
 from tendenci.apps.perms.object_perms import ObjectPermission
 from tendenci.apps.perms.models import TendenciBaseModel
@@ -32,13 +36,14 @@ from tendenci.apps.payments.models import PaymentMethod as GlobalPaymentMethod
 
 from tendenci.apps.events.settings import (
     FIELD_MAX_LENGTH, LABEL_MAX_LENGTH, FIELD_TYPE_CHOICES, USER_FIELD_CHOICES, FIELD_FUNCTIONS)
-from tendenci.apps.base.utils import localize_date
+from tendenci.apps.base.utils import (localize_date, get_timezone_choices,
+    format_datetime_range)
 from tendenci.apps.emails.models import Email
 from tendenci.libs.boto_s3.utils import set_s3_file_permission
 from tendenci.libs.abstracts.models import OrderingBaseModel
 
 # from south.modelsinspector import add_introspection_rules
-# add_introspection_rules([], ["^timezones.fields.TimeZoneField"])
+# add_introspection_rules([], [r'^timezone_field\.TimeZoneField'])
 
 EMAIL_DEFAULT_ONLY = 'default'
 EMAIL_CUSTOM_ONLY = 'custom'
@@ -62,7 +67,7 @@ class TypeColorSet(models.Model):
     class Meta:
         app_label = 'events'
 
-    def __unicode__(self):
+    def __str__(self):
         return '%s #%s' % (self.pk, self.bg_color)
 
 
@@ -74,7 +79,7 @@ class Type(models.Model):
     """
     name = models.CharField(max_length=50)
     slug = models.SlugField(max_length=50, editable=False)
-    color_set = models.ForeignKey('TypeColorSet')
+    color_set = models.ForeignKey('TypeColorSet', on_delete=models.CASCADE)
 
     objects = EventTypeManager()
 
@@ -93,7 +98,7 @@ class Type(models.Model):
     def border_color(self):
         return '#%s' % self.color_set.border_color
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
     def event_count(self):
@@ -132,10 +137,10 @@ class Place(models.Model):
         super(Place, self).__init__(*args, **kwargs)
         self._original_name = self.name
 
-    def __unicode__(self):
+    def __str__(self):
         str_place = '%s %s %s %s %s' % (
             self.name, self.address, ', '.join(self.city_state()), self.zip, self.country)
-        return unicode(str_place.strip())
+        return str(str_place.strip())
 
     def city_state(self):
         return [s for s in (self.city, self.state) if s]
@@ -180,14 +185,15 @@ class RegistrationConfiguration(models.Model):
     reg_form = models.ForeignKey("CustomRegForm", blank=True, null=True,
                                  verbose_name=_("Custom Registration Form"),
                                  related_name='regconfs',
-                                 help_text=_("You'll have the chance to edit the selected form"))
+                                 help_text=_("You'll have the chance to edit the selected form"),
+                                 on_delete=models.CASCADE)
     # a custom reg form can be bound to either RegistrationConfiguration or RegConfPricing
     bind_reg_form_to_conf_only = models.BooleanField(_(' '),
                                  choices=BIND_CHOICES,
                                  default=BIND_TRUE)
 
     # base email for reminder email
-    email = models.ForeignKey(Email, null=True)
+    email = models.ForeignKey(Email, null=True, on_delete=models.SET_NULL)
     send_reminder = models.BooleanField(_('Send Email Reminder to attendees'), default=False)
     reminder_days = models.CharField(_('Specify when (? days before the event ' +
                                        'starts) the reminder should be sent '),
@@ -259,7 +265,7 @@ class RegConfPricing(OrderingBaseModel):
     """
     Registration configuration pricing
     """
-    reg_conf = models.ForeignKey(RegistrationConfiguration, blank=True, null=True)
+    reg_conf = models.ForeignKey(RegistrationConfiguration, blank=True, null=True, on_delete=models.CASCADE)
 
     title = models.CharField(_('Pricing display name'), max_length=500, blank=True)
     description = models.TextField(_("Pricing description"), blank=True)
@@ -276,7 +282,8 @@ class RegConfPricing(OrderingBaseModel):
     reg_form = models.ForeignKey("CustomRegForm", blank=True, null=True,
                                  verbose_name=_("Custom Registration Form"),
                                  related_name='regconfpricings',
-                                 help_text=_("You'll have the chance to edit the selected form"))
+                                 help_text=_("You'll have the chance to edit the selected form"),
+                                 on_delete=models.CASCADE)
 
     start_dt = models.DateTimeField(_('Start Date'))
     end_dt = models.DateTimeField(_('End Date'))
@@ -299,7 +306,7 @@ class RegConfPricing(OrderingBaseModel):
         self.status = False
         self.save(*args, **kwargs)
 
-    def __unicode__(self):
+    def __str__(self):
         if self.title:
             return '%s' % self.title
         return '%s' % self.pk
@@ -361,7 +368,7 @@ class RegConfPricing(OrderingBaseModel):
         filter_and, filter_or = None, None
 
         if is_strict:
-            if user.is_anonymous():
+            if user.is_anonymous:
                 filter_or = {'allow_anonymous': True}
             elif not user.profile.is_member:
                 filter_or = {'allow_anonymous': True,
@@ -377,7 +384,7 @@ class RegConfPricing(OrderingBaseModel):
             filter_or = {'allow_anonymous': True,
                         'allow_user': True,
                         'allow_member': True}
-        if not user.is_anonymous() and user.profile.is_member:
+        if not user.is_anonymous and user.profile.is_member:
             # get a list of groups for this user
             groups_id_list = user.group_member.values_list('group__id', flat=True)
             if groups_id_list:
@@ -410,18 +417,18 @@ class Registration(models.Model):
 
     guid = models.TextField(max_length=40, editable=False)
     note = models.TextField(blank=True)
-    event = models.ForeignKey('Event')
-    invoice = models.ForeignKey(Invoice, blank=True, null=True)
+    event = models.ForeignKey('Event', on_delete=models.CASCADE)
+    invoice = models.ForeignKey(Invoice, blank=True, null=True, on_delete=models.SET_NULL)
 
     # This field will not be used if dynamic pricings are enabled for registration
     # The pricings should then be found in the Registrant instances
-    reg_conf_price = models.ForeignKey(RegConfPricing, null=True)
+    reg_conf_price = models.ForeignKey(RegConfPricing, null=True, on_delete=models.SET_NULL)
 
     reminder = models.BooleanField(default=False)
 
     # TODO: Payment-Method must be soft-deleted
     # so that it may always be referenced
-    payment_method = models.ForeignKey(GlobalPaymentMethod, null=True)
+    payment_method = models.ForeignKey(GlobalPaymentMethod, null=True, on_delete=models.SET_NULL)
     amount_paid = models.DecimalField(_('Amount Paid'), max_digits=21, decimal_places=2)
 
     is_table = models.BooleanField(_('Is table registration'), default=False)
@@ -449,7 +456,7 @@ class Registration(models.Model):
         permissions = (("view_registration",_("Can view registration")),)
         app_label = 'events'
 
-    def __unicode__(self):
+    def __str__(self):
         return 'Registration - %s' % self.event.title
 
     @property
@@ -458,7 +465,16 @@ class Registration(models.Model):
 
     @property
     def hash(self):
-        return md5(".".join([str(self.event.pk), str(self.pk)])).hexdigest()
+        return md5(".".join([str(self.event.pk), str(self.pk)]).encode()).hexdigest()
+
+    def payment_abandoned(self):
+        if self.invoice and self.invoice.balance > 0 and \
+            self.invoice.payment_set.filter(status_detail='').exists():
+            # the payment was attempted a day ago but not finished - we can say
+            # it is abandoned
+            if self.invoice.create_dt + timedelta(days=1) < datetime.now():
+                return True
+        return False
 
     # Called by payments_pop_by_invoice_user in Payment model.
     def get_payment_description(self, inv):
@@ -506,12 +522,10 @@ class Registration(models.Model):
         """
         Update the object after online payment is received.
         """
-        from datetime import datetime
         try:
             from tendenci.apps.notifications import models as notification
         except:
             notification = None
-        from tendenci.apps.perms.utils import get_notice_recipients
         from tendenci.apps.events.utils import email_admins
 
         site_label = get_setting('site', 'global', 'sitedisplayname')
@@ -524,7 +538,7 @@ class Registration(models.Model):
         for registrant in registrants:
             #registrant.assign_mapped_fields()
             if registrant.custom_reg_form_entry:
-                registrant.name = registrant.custom_reg_form_entry.__unicode__()
+                registrant.name = str(registrant.custom_reg_form_entry)
             else:
                 registrant.name = ' '.join([registrant.first_name, registrant.last_name])
 
@@ -588,7 +602,7 @@ class Registration(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.pk:
-            self.guid = str(uuid.uuid1())
+            self.guid = str(uuid.uuid4())
         super(Registration, self).save(*args, **kwargs)
 
     def get_invoice(self):
@@ -714,13 +728,13 @@ class Registrant(models.Model):
     The names do not change nor does their information
     This is the information that was used while registering
     """
-    registration = models.ForeignKey('Registration')
+    registration = models.ForeignKey('Registration', on_delete=models.CASCADE)
     user = models.ForeignKey(User, blank=True, null=True, on_delete=models.SET_NULL)
     amount = models.DecimalField(_('Amount'), max_digits=21, decimal_places=2, blank=True, default=0)
-    pricing = models.ForeignKey('RegConfPricing', null=True)  # used for dynamic pricing
+    pricing = models.ForeignKey('RegConfPricing', null=True, on_delete=models.SET_NULL)  # used for dynamic pricing
 
     custom_reg_form_entry = models.ForeignKey(
-        "CustomRegFormEntry", related_name="registrants", null=True)
+        "CustomRegFormEntry", related_name="registrants", null=True, on_delete=models.CASCADE)
 
     name = models.CharField(max_length=100)
     salutation = models.CharField(_('salutation'), max_length=15,
@@ -778,7 +792,7 @@ class Registrant(models.Model):
         permissions = (("view_registrant", _("Can view registrant")),)
         app_label = 'events'
 
-    def __unicode__(self):
+    def __str__(self):
         if self.custom_reg_form_entry:
             return self.custom_reg_form_entry.get_lastname_firstname()
         else:
@@ -825,15 +839,13 @@ class Registrant(models.Model):
 
     @property
     def hash(self):
-        return md5(".".join([str(self.registration.event.pk), str(self.pk)])).hexdigest()
+        return md5(".".join([str(self.registration.event.pk), str(self.pk)]).encode()).hexdigest()
 
-    @models.permalink
     def hash_url(self):
-        return ('event.registration_confirmation', [self.registration.event.pk, self.hash])
+        return reverse('event.registration_confirmation', args=[self.registration.event.pk, self.hash])
 
-    @models.permalink
     def get_absolute_url(self):
-        return ('event.registration_confirmation', [self.registration.event.pk, self.registration.pk])
+        return reverse('event.registration_confirmation', args=[self.registration.event.pk, self.registration.pk])
 
     def reg8n_status(self):
         """
@@ -929,7 +941,7 @@ class Payment(models.Model):
     Event registration payment
     Extends the registration model
     """
-    registration = models.OneToOneField('Registration')
+    registration = models.OneToOneField('Registration', on_delete=models.CASCADE)
 
     class Meta:
         app_label = 'events'
@@ -947,7 +959,7 @@ class PaymentMethod(models.Model):
     class Meta:
         app_label = 'events'
 
-    def __unicode__(self):
+    def __str__(self):
         return self.label
 
 
@@ -969,7 +981,7 @@ class Discount(models.Model):
     Event can have multiple discounts
     Discount can only be associated with one event
     """
-    event = models.ForeignKey('Event')
+    event = models.ForeignKey('Event', on_delete=models.CASCADE)
     name = models.CharField(max_length=50)
     code = models.CharField(max_length=50)
 
@@ -985,7 +997,7 @@ class Organizer(models.Model):
     _original_name = None
 
     event = models.ManyToManyField('Event', blank=True)
-    user = models.OneToOneField(User, blank=True, null=True)
+    user = models.OneToOneField(User, blank=True, null=True, on_delete=models.CASCADE)
     name = models.CharField(max_length=100, blank=True) # static info.
     description = models.TextField(blank=True) # static info.
 
@@ -996,7 +1008,7 @@ class Organizer(models.Model):
         super(Organizer, self).__init__(*args, **kwargs)
         self._original_name = self.name
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
 
@@ -1009,7 +1021,7 @@ class Speaker(models.Model):
     _original_name = None
 
     event = models.ManyToManyField('Event', blank=True)
-    user = models.OneToOneField(User, blank=True, null=True)
+    user = models.OneToOneField(User, blank=True, null=True, on_delete=models.CASCADE)
     name = models.CharField(_('Speaker Name'), blank=True, max_length=100) # static info.
     description = models.TextField(blank=True) # static info.
     featured = models.BooleanField(
@@ -1023,7 +1035,7 @@ class Speaker(models.Model):
         super(Speaker, self).__init__(*args, **kwargs)
         self._original_name = self.name
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
     def files(self):
@@ -1082,6 +1094,12 @@ class RecurringEvent(models.Model):
                             'ends_on': ends_on})
 
 
+class EventPhoto(File):
+    class Meta:
+        app_label = 'events'
+        manager_inheritance_from_future = True
+
+
 class Event(TendenciBaseModel):
     """
     Calendar Event
@@ -1093,24 +1111,24 @@ class Event(TendenciBaseModel):
     all_day = models.BooleanField(default=False)
     start_dt = models.DateTimeField()
     end_dt = models.DateTimeField()
-    timezone = TimeZoneField(_('Time Zone'))
-    place = models.ForeignKey('Place', null=True)
-    registration_configuration = models.OneToOneField('RegistrationConfiguration', null=True, editable=False)
+    timezone = TimeZoneField(verbose_name=_('Time Zone'), default='US/Central', choices=get_timezone_choices(), max_length=100)
+    place = models.ForeignKey('Place', null=True, on_delete=models.SET_NULL)
+    registration_configuration = models.OneToOneField('RegistrationConfiguration', null=True, editable=False, on_delete=models.CASCADE)
     mark_registration_ended = models.BooleanField(_('Registration Ended'), default=False)
     enable_private_slug = models.BooleanField(_('Enable Private URL'), blank=True, default=False) # hide from lists
     private_slug = models.CharField(max_length=500, blank=True, default=u'')
     password = models.CharField(max_length=50, blank=True)
     on_weekend = models.BooleanField(default=True, help_text=_("This event occurs on weekends"))
     external_url = models.URLField(_('External URL'), default=u'', blank=True)
-    image = models.ForeignKey('EventPhoto',
-        help_text=_('Photo that represents this event.'), null=True, blank=True)
+    image = models.ForeignKey(EventPhoto,
+        help_text=_('Photo that represents this event.'), null=True, blank=True, on_delete=models.SET_NULL)
     groups = models.ManyToManyField(Group, default=get_default_group, related_name='events')
     tags = TagField(blank=True)
     priority = models.BooleanField(default=False, help_text=_("Priority events will show up at the top of the event calendar day list and single day list. They will be featured with a star icon on the monthly calendar and the list view."))
 
     # recurring events
     is_recurring_event = models.BooleanField(_('Is Recurring Event'), default=False)
-    recurring_event = models.ForeignKey(RecurringEvent, null=True)
+    recurring_event = models.ForeignKey(RecurringEvent, null=True, on_delete=models.CASCADE)
 
     # additional permissions
     display_event_registrants = models.BooleanField(_('Display Attendees'), default=False)
@@ -1121,7 +1139,7 @@ class Event(TendenciBaseModel):
     display_registrants_to = models.CharField(max_length=6, choices=DISPLAY_REGISTRANTS_TO_CHOICES, default="admin")
 
     # html-meta tags
-    meta = models.OneToOneField(MetaTags, null=True)
+    meta = models.OneToOneField(MetaTags, null=True, on_delete=models.SET_NULL)
 
     perms = GenericRelation(ObjectPermission,
                                           object_id_field="object_id",
@@ -1148,26 +1166,24 @@ class Event(TendenciBaseModel):
     def is_registrant(self, user):
         return Registration.objects.filter(event=self, registrant=user).exists()
 
-    @models.permalink
     def get_absolute_url(self):
-        return ("event", [self.pk])
+        return reverse('event', args=[self.pk])
 
-    @models.permalink
     def get_registration_url(self):
         """ This is used to include a sign up url in the event.
         Sample usage in template:
         <a href="{{ event.get_registration_url }}">Sign up now!</a>
         """
-        return ("registration_event_register", [self.pk])
+        return reverse('registration_event_register', args=[self.pk])
 
     def save(self, *args, **kwargs):
-        self.guid = self.guid or str(uuid.uuid1())
+        self.guid = self.guid or str(uuid.uuid4())
         super(Event, self).save(*args, **kwargs)
 
         if self.image:
             set_s3_file_permission(self.image.file, public=self.is_public())
 
-    def __unicode__(self):
+    def __str__(self):
         return self.title
 
     @property
@@ -1180,7 +1196,6 @@ class Event(TendenciBaseModel):
     # this function is to display the event date in a nice way.
     # example format: Thursday, August 12, 2010 8:30 AM - 05:30 PM - GJQ 8/12/2010
     def dt_display(self, format_date='%a, %b %d, %Y', format_time='%I:%M %p'):
-        from tendenci.apps.base.utils import format_datetime_range
         return format_datetime_range(self.start_dt, self.end_dt, format_date, format_time)
 
     @property
@@ -1266,7 +1281,7 @@ class Event(TendenciBaseModel):
                 return True
             if user.profile.is_member and self.display_registrants_to == 'member':
                 return True
-            if not user.profile.is_member and not user.is_anonymous() and self.display_registrants_to == 'user':
+            if not user.profile.is_member and not user.is_anonymous and self.display_registrants_to == 'user':
                 return True
 
         return False
@@ -1370,7 +1385,7 @@ class Event(TendenciBaseModel):
         Returns newly generated slug
         Option: length (default: 7)
         """
-        return uuid.uuid1().get_hex()[:length]
+        return uuid.uuid4().hex[:length]
 
     def get_private_slug(self, absolute_url=False):
         """
@@ -1450,7 +1465,7 @@ class CustomRegForm(models.Model):
         verbose_name_plural = _("Custom Registration Forms")
         app_label = 'events'
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
     @property
@@ -1495,7 +1510,7 @@ class CustomRegForm(models.Model):
 
 
 class CustomRegField(OrderingBaseModel):
-    form = models.ForeignKey("CustomRegForm", related_name="fields")
+    form = models.ForeignKey("CustomRegForm", related_name="fields", on_delete=models.CASCADE)
     label = models.CharField(_("Label"), max_length=LABEL_MAX_LENGTH)
     map_to_field = models.CharField(_("Map to User Field"), choices=USER_FIELD_CHOICES,
         max_length=64, blank=True, null=True)
@@ -1549,13 +1564,13 @@ class CustomRegField(OrderingBaseModel):
 
 
 class CustomRegFormEntry(models.Model):
-    form = models.ForeignKey("CustomRegForm", related_name="entries")
+    form = models.ForeignKey("CustomRegForm", related_name="entries", on_delete=models.CASCADE)
     entry_time = models.DateTimeField(_("Date/time"))
 
     class Meta:
         app_label = 'events'
 
-    def __unicode__(self):
+    def __str__(self):
         name = self.get_name()
         if name:
             return name
@@ -1632,22 +1647,15 @@ class CustomRegFormEntry(models.Model):
 
 
 class CustomRegFieldEntry(models.Model):
-    entry = models.ForeignKey("CustomRegFormEntry", related_name="field_entries")
-    field = models.ForeignKey("CustomRegField", related_name="entries")
+    entry = models.ForeignKey("CustomRegFormEntry", related_name="field_entries", on_delete=models.CASCADE)
+    field = models.ForeignKey("CustomRegField", related_name="entries", on_delete=models.CASCADE)
     value = models.CharField(max_length=FIELD_MAX_LENGTH)
 
     class Meta:
         app_label = 'events'
 
-class EventPhoto(File):
-    pass
-
-    class Meta:
-        app_label = 'events'
-
-
 class Addon(models.Model):
-    event = models.ForeignKey(Event)
+    event = models.ForeignKey(Event, on_delete=models.CASCADE)
     title = models.CharField(max_length=50)
 
     class Meta:
@@ -1655,7 +1663,7 @@ class Addon(models.Model):
 
     price = models.DecimalField(_('Price'), max_digits=21, decimal_places=2, default=0)
     # permission fields
-    group = models.ForeignKey(Group, blank=True, null=True)
+    group = models.ForeignKey(Group, blank=True, null=True, on_delete=models.SET_NULL)
     allow_anonymous = models.BooleanField(_("Public can use"), default=False)
     allow_user = models.BooleanField(_("Signed in user can use"), default=False)
     allow_member = models.BooleanField(_("All members can use"), default=False)
@@ -1675,7 +1683,7 @@ class Addon(models.Model):
             # actual delete of an Addon
             super(Addon, self).delete(*args, **kwargs)
 
-    def __unicode__(self):
+    def __str__(self):
         return self.title
 
     def available(self):
@@ -1691,7 +1699,7 @@ class Addon(models.Model):
 
 
 class AddonOption(models.Model):
-    addon = models.ForeignKey(Addon, related_name="options")
+    addon = models.ForeignKey(Addon, related_name="options", on_delete=models.CASCADE)
     title = models.CharField(max_length=100)
     # old field for 2 level options (e.g. Option: Size -> Choices: small, large)
     # choices = models.CharField(max_length=200, help_text=_('options are separated by commas, ex: option 1, option 2, option 3'))
@@ -1699,7 +1707,7 @@ class AddonOption(models.Model):
     class Meta:
         app_label = 'events'
 
-    def __unicode__(self):
+    def __str__(self):
         return self.title
 
 
@@ -1709,8 +1717,8 @@ class RegAddon(models.Model):
     This stores the addon's price at the time of registration.
     This stores the user's selected options for the addon.
     """
-    registration = models.ForeignKey('Registration')
-    addon = models.ForeignKey('Addon')
+    registration = models.ForeignKey('Registration', on_delete=models.CASCADE)
+    addon = models.ForeignKey('Addon', on_delete=models.CASCADE)
 
     # price at the moment of registration
     amount = models.DecimalField(_('Amount'), max_digits=21, decimal_places=2, default=0)
@@ -1721,15 +1729,15 @@ class RegAddon(models.Model):
     class Meta:
         app_label = 'events'
 
-    def __unicode__(self):
+    def __str__(self):
         return "%s: %s" % (self.registration.pk, self.addon.title)
 
 
 class RegAddonOption(models.Model):
     """Selected event registration addon option.
     """
-    regaddon = models.ForeignKey(RegAddon)
-    option = models.ForeignKey(AddonOption)
+    regaddon = models.ForeignKey(RegAddon, on_delete=models.CASCADE)
+    option = models.ForeignKey(AddonOption, on_delete=models.CASCADE)
     # old field for 2 level options (e.g. Option: Size -> Choices: small, large)
     # selected_option = models.CharField(max_length=50)
 
@@ -1737,6 +1745,6 @@ class RegAddonOption(models.Model):
         unique_together = (('regaddon', 'option'),)
         app_label = 'events'
 
-    def __unicode__(self):
+    def __str__(self):
         #return "%s: %s - %s" % (self.regaddon.pk, self.option.title, self.selected_option)
         return "%s: %s" % (self.regaddon.pk, self.option.title)

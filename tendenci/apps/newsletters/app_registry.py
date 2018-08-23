@@ -1,4 +1,3 @@
-from django.conf import settings
 from django.utils.translation import ugettext_lazy as _
 
 from tendenci.apps.registry.sites import site
@@ -8,8 +7,8 @@ from tendenci.apps.newsletters.models import Newsletter
 
 class NewsletterRegistry(CoreRegistry):
     version = '1.0'
-    author = _('Schipul - The Web Marketing Company')
-    author_email = 'programmers@schipul.com'
+    author = _('Tendenci - The Open Source AMS for Associations')
+    author_email = 'programmers@tendenci.com'
     description = _('Create newsletter')
 
     event_logs = {

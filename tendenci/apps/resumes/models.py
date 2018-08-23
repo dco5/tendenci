@@ -1,7 +1,7 @@
 import uuid
-import re
 
 from django.db import models
+from django.urls import reverse
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.contenttypes.fields import GenericRelation
 
@@ -88,7 +88,7 @@ class Resume(TendenciBaseModel):
     # status = models.NullBooleanField("Active", default=True)
     # status_detail = models.CharField(max_length=50, default='active')
 
-    meta = models.OneToOneField(MetaTags, null=True)
+    meta = models.OneToOneField(MetaTags, null=True, on_delete=models.SET_NULL)
     tags = TagField(blank=True)
 
     perms = GenericRelation(ObjectPermission,
@@ -109,15 +109,14 @@ class Resume(TendenciBaseModel):
         """
         return ResumeMeta().get_meta(self, name)
 
-    @models.permalink
     def get_absolute_url(self):
-        return ("resume", [self.slug])
+        return reverse('resume', args=[self.slug])
 
     def save(self, *args, **kwargs):
-        self.guid = self.guid or uuid.uuid1()
+        self.guid = self.guid or uuid.uuid4()
         super(Resume, self).save(*args, **kwargs)
 
-    def __unicode__(self):
+    def __str__(self):
         return self.title
 
     def is_pending(self):

@@ -1,0 +1,36 @@
+{% extends "stories/base.html" %}
+{% load base_tags %}
+
+{% block title %}{% trans "Delete Story" %} {{ story.title }}{% endblock %}
+
+{% block extra_head %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'css/stories.css' %}">
+<link rel="stylesheet" href="{% static 'css/delete.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="t">
+    <div class="story-wrap">
+        <h1>{% trans "Delete a Story" %}</h1>
+        {% if story.image %}
+        <div class="photo">
+            <img src="{% image_url story.image size=300x300 crop=True quality=88 %}" title="{{ story.title|truncatechars:123 }}"  alt="{{ story.title|truncatechars:123 }}" />
+        </div>
+        {% endif %}
+        <div class="content">
+        <h2>{{ story.title }}</h2>
+        {{ story.content|safe }}
+        </div>
+        <div class="delete-prompt">
+            {% trans "Are you sure you want to permanently delete this story?" %}
+        </div>
+        <div class="delete-form">
+            <form action="{% url "story.delete" story.id %}" method="post">{% csrf_token %}
+                <input type="submit" value="{% trans "Confirm Delete" %}" />
+            </form>
+        </div>
+        <div class="back-search"><a href="{% url "story.search" %}">&laquo; {% trans "Back to all" %} {% firstof MODULE_STORIES_LABEL 'stories' %} </a></div>
+    </div>
+</div>
+{% endblock %}

@@ -1,6 +1,6 @@
 import time
 from django.conf import settings
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.http import HttpResponseRedirect
 from django.utils.http import urlquote
 from django.shortcuts import redirect
@@ -12,7 +12,7 @@ def ssl_required(view_func):
     """Decorator to force url to be accessed over SSL (https).
     """
     def decorator(request, *args, **kwargs):
-        if not any([request.is_secure(), request.META.get("HTTP_X_FORWARDED_PROTO", "") == 'https']):
+        if not request.is_secure():
             if getattr(settings, 'SSL_ENABLED', False):
                 request_url = request.build_absolute_uri(request.get_full_path())
                 ssl_url = request_url.replace('http://', 'https://')

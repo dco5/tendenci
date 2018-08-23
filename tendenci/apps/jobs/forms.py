@@ -4,15 +4,14 @@ from django import forms
 from django.contrib.admin import widgets
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext_lazy as _
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 # from captcha.fields import CaptchaField
 from tendenci.libs.tinymce.widgets import TinyMCE
 
-from tendenci.apps.categories.models import Category
 from tendenci.apps.jobs.models import Job
 from tendenci.apps.perms.forms import TendenciBaseForm
-from tendenci.apps.base.fields import SplitDateTimeField, EmailVerificationField, CountrySelectField, PriceField
+from tendenci.apps.base.fields import EmailVerificationField, CountrySelectField, PriceField
 from tendenci.apps.base.forms import FormControlWidgetMixin
 from tendenci.apps.jobs.models import JobPricing
 from tendenci.apps.jobs.models import Category as JobCategory
@@ -61,20 +60,20 @@ class JobForm(TendenciBaseForm):
 
     captcha = CustomCatpchaField(label=_('Type the code below'))
 
-    start_dt = SplitDateTimeField(
+    start_dt = forms.SplitDateTimeField(
         required=False,
         label=_('Position starts on:'),
         initial=datetime.now())
 
-    activation_dt = SplitDateTimeField(
+    activation_dt = forms.SplitDateTimeField(
         label=_('Activation Date/Time'),
         initial=datetime.now())
 
-    post_dt = SplitDateTimeField(
+    post_dt = forms.SplitDateTimeField(
         label=_('Post Date/Time'),
         initial=datetime.now())
 
-    expiration_dt = SplitDateTimeField(
+    expiration_dt = forms.SplitDateTimeField(
         label=_('Expiration Date/Time'),
         initial=datetime.now())
 
@@ -274,7 +273,7 @@ class JobForm(TendenciBaseForm):
 
         # adjust fields depending on user status
         fields_to_pop = []
-        if not self.user.is_authenticated():
+        if not self.user.is_authenticated:
             fields_to_pop += [
                 'entity',
                 'allow_anonymous_view',

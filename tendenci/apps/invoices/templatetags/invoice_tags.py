@@ -20,24 +20,18 @@ def invoices_search_results_line(request, invoice):
     search_line_display = None
     if invoice.object_type:
         from django.template.loader import render_to_string
-        from django.template import RequestContext
         from django.template import TemplateDoesNotExist
 
         app_label = invoice.object_type.app_label
-        model = invoice.object_type.model
-        # since membership app has 2 different associated invoices
-        if app_label == 'memberships' and model == 'membershipset':
-            template_name = "%s/invoice_search_result_line2.html" % (app_label)
-        else:
-            template_name = "%s/invoice_search_result_line.html" % (app_label)
+        template_name = "%s/invoice_search_result_line.html" % (app_label)
 
         try:
             search_line_display = render_to_string(
-                template_name,
-                {'obj':obj,'invoice':invoice},
-                context_instance=RequestContext(request)
+                template_name=template_name,
+                context={'obj':obj,'invoice':invoice},
+                request=request
             )
-        except TemplateDoesNotExist:
+        except (TemplateDoesNotExist, IOError):
             pass
 
     return {'request':request, 'invoice':invoice, 'obj':obj, 'search_line_display':search_line_display}
@@ -73,7 +67,6 @@ def invoice_object_display(request, invoice):
 
     if invoice.object_type:
         from django.template.loader import render_to_string
-        from django.template import RequestContext
         from django.template import TemplateDoesNotExist
 
         app_label = invoice.object_type.app_label
@@ -85,11 +78,11 @@ def invoice_object_display(request, invoice):
             template_name = "%s/invoice_view_display.html" % (app_label)
         try:
             object_display = render_to_string(
-                template_name,
-                {'obj': obj, 'invoice': invoice},
-                context_instance=RequestContext(request)
+                template_name=template_name,
+                context={'obj': obj, 'invoice': invoice},
+                request=request
             )
-        except TemplateDoesNotExist:
+        except (TemplateDoesNotExist, IOError):
             pass
 
     context = {

@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals, absolute_import
 
+from tendenci.apps.theme.templatetags.static import static
 from bbcode import Parser
 from django.forms import Textarea
-from django.template import Context
 from django.template.loader import get_template
 from ..markup.base import smile_it, BaseParser
 
@@ -12,21 +12,21 @@ class BBCodeWidget(Textarea):
     class Media:
         css = {
             'all': (
-                'markitup/skins/simple/style.css',
-                'markitup/sets/bbcode/style.css',
+                static('markitup/skins/simple/style.css'),
+                static('markitup/sets/bbcode/style.css'),
             ),
         }
         js = (
-            'markitup/ajax_csrf.js',
-            'markitup/jquery.markitup.js',
-            'markitup/sets/bbcode/set.js',
-            'pybb/js/markitup.js',
+            static('markitup/ajax_csrf.js'),
+            static('markitup/jquery.markitup.js'),
+            static('markitup/sets/bbcode/set.js'),
+            static('pybb/js/markitup.js'),
         )
 
     def render(self, *args, **kwargs):
         tpl = get_template('pybb/markup/bbcode_widget.html')
-        ctx = Context({'widget_output': super(BBCodeWidget, self).render(*args, **kwargs)})
-        return tpl.render(ctx)
+        ctx = {'widget_output': super(BBCodeWidget, self).render(*args, **kwargs)}
+        return tpl.render(context=ctx)
 
 
 class BBCodeParser(BaseParser):

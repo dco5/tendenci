@@ -2,7 +2,7 @@
 
 from __future__ import unicode_literals
 from django.contrib.syndication.views import Feed
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.utils.feedgenerator import Atom1Feed
 from django.utils.translation import ugettext_lazy as _
 
@@ -12,6 +12,10 @@ from .permissions import perms
 
 class PybbFeed(Feed):
     feed_type = Atom1Feed
+
+    def __init__(self):
+        super(PybbFeed, self).__init__()
+        self.__qualname__ = self.__class__.__name__  # https://code.djangoproject.com/ticket/29296
 
     def link(self):
         return reverse('pybb:index')

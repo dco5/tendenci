@@ -1,0 +1,23 @@
+{% extends "navs/base.html" %}
+{% load nav_tags %}
+{% load base_tags %}
+{% load base_filters %}
+
+{% block title %}{{ block.super }} {{ current_nav.title }}{% endblock %}
+
+{% block extra_head %}
+{{ block.super }}
+<link rel="stylesheet" href="{% static 'css/navs.css' %}">
+{% endblock %}
+
+{% block content %}
+<div class="t">
+    <div class="nav-wrap">
+        <h1>{{ current_nav.title }}</h1>
+        <div class="content">
+            {{ current_nav.description }}
+        </div>
+        {% nav current_nav.id %}
+    </div>
+</div>
+{% endblock %}

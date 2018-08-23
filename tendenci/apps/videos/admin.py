@@ -1,11 +1,11 @@
 from django.contrib import admin
-from django.conf import settings
 from django.utils.translation import ugettext_lazy as _
 
 from tendenci.apps.perms.admin import TendenciBaseModelAdmin
 from tendenci.apps.videos.models import Video, Category, VideoType
 from tendenci.apps.videos.forms import VideoForm
 from tendenci.apps.site_settings.utils import get_setting
+from tendenci.apps.theme.templatetags.static import static
 
 
 class VideoInline(admin.TabularInline):
@@ -27,7 +27,7 @@ class CategoryAdmin(admin.ModelAdmin):
         js = (
             '//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js',
             '//ajax.googleapis.com/ajax/libs/jqueryui/1.11.0/jquery-ui.min.js',
-            'js/admin/admin-list-reorder.js',
+            static('js/admin/admin-list-reorder.js'),
         )
 
 
@@ -73,8 +73,8 @@ class VideoAdmin(TendenciBaseModelAdmin):
         js = (
             '//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js',
             '//ajax.googleapis.com/ajax/libs/jqueryui/1.11.0/jquery-ui.min.js',
-            'js/admin/admin-list-reorder.js',
-            'js/global/tinymce.event_handlers.js',
+            static('js/admin/admin-list-reorder.js'),
+            static('js/global/tinymce.event_handlers.js'),
         )
 
     def get_fieldsets(self, request, obj=None):

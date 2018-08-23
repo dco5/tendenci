@@ -2,6 +2,7 @@ import uuid
 
 from datetime import timedelta, datetime
 from django.db import models
+from django.urls import reverse
 from tendenci.apps.user_groups.models import Group
 from tendenci.apps.user_groups.utils import get_default_group
 from django.utils.translation import ugettext_lazy as _
@@ -12,7 +13,6 @@ from django.contrib.auth.models import AnonymousUser
 from tendenci.apps.categories.models import CategoryItem
 from tagging.fields import TagField
 from tendenci.apps.base.fields import SlugField
-from tendenci.apps.base.utils import now_localized
 from tendenci.apps.perms.models import TendenciBaseModel
 from tendenci.apps.perms.object_perms import ObjectPermission
 from tendenci.apps.jobs.managers import JobManager
@@ -25,7 +25,7 @@ from tendenci.apps.invoices.models import Invoice
 class Category(models.Model):
     name = models.CharField(max_length=255)
     slug = models.SlugField()
-    parent = models.ForeignKey('self', blank=True, null=True, related_name='children')
+    parent = models.ForeignKey('self', blank=True, null=True, related_name='children', on_delete=models.CASCADE)
 
     class Meta:
         unique_together = ('slug', 'parent',)
@@ -33,7 +33,7 @@ class Category(models.Model):
         ordering = ('name',)
         app_label = 'jobs'
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 #         full_path = [self.name]
 #         p = self.parent
@@ -69,7 +69,7 @@ class BaseJob(TendenciBaseModel):
 
     # date related fields
     requested_duration = models.IntegerField()  # 30, 60, 90 days - should be relational table
-    pricing = models.ForeignKey('JobPricing', null=True)  # selected pricing based on requested_duration
+    pricing = models.ForeignKey('JobPricing', null=True, on_delete=models.SET_NULL)  # selected pricing based on requested_duration
     activation_dt = models.DateTimeField(null=True, blank=True)  # date job listing was activated
     post_dt = models.DateTimeField(null=True, blank=True)  # date job was posted (same as create date?)
     expiration_dt = models.DateTimeField(null=True, blank=True)  # date job expires based on activation date and duration
@@ -93,11 +93,11 @@ class BaseJob(TendenciBaseModel):
     contact_email = models.CharField(max_length=300, blank=True)
     contact_website = models.CharField(max_length=300, blank=True)
 
-    meta = models.OneToOneField(MetaTags, null=True)
+    meta = models.OneToOneField(MetaTags, null=True, on_delete=models.CASCADE)
     group = models.ForeignKey(Group, null=True, default=get_default_group, on_delete=models.SET_NULL)
     tags = TagField(blank=True)
 
-    invoice = models.ForeignKey(Invoice, blank=True, null=True)
+    invoice = models.ForeignKey(Invoice, blank=True, null=True, on_delete=models.SET_NULL)
     payment_method = models.CharField(max_length=50, blank=True, default='')
     member_price = models.DecimalField(max_digits=20, decimal_places=2, blank=True, null=True)
     member_count = models.IntegerField(blank=True, null=True)
@@ -129,11 +129,11 @@ class BaseJob(TendenciBaseModel):
 
     def save(self, *args, **kwargs):
         if not self.id:
-            self.guid = str(uuid.uuid1())
+            self.guid = str(uuid.uuid4())
 
         super(BaseJob, self).save(*args, **kwargs)
 
-    def __unicode__(self):
+    def __str__(self):
         return self.title
 
     # Called by payments_pop_by_invoice_user in Payment model.
@@ -209,13 +209,11 @@ class Job(BaseJob):
         """
         return JobMeta().get_meta(self, name)
 
-    @models.permalink
     def get_absolute_url(self):
-        return ("job", [self.slug])
+        return reverse('job', args=[self.slug])
 
-    @models.permalink
     def get_approve_url(self):
-        return ("job.approve", [self.id])
+        return reverse('job.approve', args=[self.id])
 
 
 class JobPricing(models.Model):
@@ -244,7 +242,7 @@ class JobPricing(models.Model):
         verbose_name_plural = _("Job Pricings")
         app_label = 'jobs'
 
-    def __unicode__(self):
+    def __str__(self):
         price = "%s/%s" % (self.regular_price, self.premium_price)
         return "%s: %s Days for %s" % (self.get_title(), self.duration, price)
 
@@ -255,7 +253,7 @@ class JobPricing(models.Model):
 
     def save(self, user=None, *args, **kwargs):
         if not self.id:
-            self.guid = str(uuid.uuid1())
+            self.guid = str(uuid.uuid4())
             if user and user.id:
                 self.creator = user
                 self.creator_username = user.username
@@ -274,7 +272,7 @@ class JobPricing(models.Model):
         super(JobPricing, self).save(*args, **kwargs)
 
     def get_price_for_user(self, user=AnonymousUser(), list_type='regular'):
-        if not user.is_anonymous() and user.profile.is_member:
+        if not user.is_anonymous and user.profile.is_member:
             if list_type == 'regular':
                 return self.regular_price_member
             else:

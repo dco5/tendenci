@@ -1,15 +1,15 @@
 import re
-import urllib2
+from six.moves.urllib.request import urlopen
 from hashlib import md5
 
 from tagging.templatetags.tagging_tags import TagsForObjectNode
 from tagging.models import Tag
-from BeautifulSoup import BeautifulStoneSoup
+from bs4 import BeautifulStoneSoup
 
 from django.utils.safestring import mark_safe
 from django.template import Library, Node, Variable, TemplateSyntaxError
 from django.contrib.auth.models import User
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.core.cache import cache
 from django.conf import settings
 from django.utils.translation import ugettext_lazy as _
@@ -21,6 +21,7 @@ from tendenci.apps.profiles.models import Profile
 from tendenci.apps.files.cache import FILE_IMAGE_PRE_KEY
 from tendenci.apps.files.utils import generate_image_cache_key
 from tendenci.apps.site_settings.utils import get_setting
+from tendenci.apps.theme.templatetags.static import static
 
 register = Library()
 
@@ -43,7 +44,7 @@ class GoogleCMapsURL(Node):
             origin = self.origin.resolve(context)
         else:
             origin = None
-        
+
         url = '{base_url}?center={lat}%2C{lng}&size={size}&markers={markers}%7C{lat}%2C{lng}'.format(
                                                     base_url=GOOGLE_SMAPS_BASE_URL,
                                                     lat=location.latitude,
@@ -52,7 +53,7 @@ class GoogleCMapsURL(Node):
                                                     markers=self.markers.replace(':', '%3A').replace('|', '%7C'))
         if self.zoom:
             url = url + '&zoom=' + self.zoom
-            
+
         if origin:
             url = url + '&markers={markers_origin}%7C{origin_lat}%2C{origin_lng}'.format(
                             markers_origin=self.markers_origin.replace(':', '%3A').replace('|', '%7C'),
@@ -62,7 +63,7 @@ class GoogleCMapsURL(Node):
         api_key = get_setting('module', 'locations', 'google_maps_api_key')
         if api_key:
             url = url + '&key=' + api_key
- 
+
             if settings.GOOGLE_SMAPS_URL_SIGNING_SECRET:
                 # sign url with signing secret
                 url = google_cmap_sign_url(url)
@@ -80,15 +81,15 @@ def google_cmaps_url(parser, token):
         <img src="{% google_cmaps_url location size=200x200 markers=color:red|label:A zoom=8 %}" />
         <img src="{% google_cmaps_url location origin size=200x200 markers=color:red|label:A markers_origin=color:green|label:B zoom=8 %}" />
     """
-    args, kwargs = [], {}
+    kwargs = {}
     bits = token.split_contents()
     if len(bits) < 2:
         message = "'%s' tag requires more than 1 argument" % bits[0]
         raise TemplateSyntaxError(_(message))
-    
+
     location = bits[1]
 
-    if not '=' in bits[2]:
+    if '=' not in bits[2]:
         origin = bits[2]
     else:
         origin = None
@@ -144,14 +145,14 @@ class FanCountNode(Node):
         if self.service == "facebook":
             query = '%s?method=facebook.fql.query&query=SELECT%%20fan_count%%20FROM%%20page%%20WHERE%%20page_id=%s'
             xml_path = query % (fb_api_url, self.service_id)
-            cache_key = md5(xml_path).hexdigest()
+            cache_key = md5(xml_path.encode()).hexdigest()
             fancount = cache.get(cache_key)
             if not fancount:
                 try:
-                    xml = urllib2.urlopen(xml_path)
+                    xml = urlopen(xml_path)
                     content = xml.read()
                     soup = BeautifulStoneSoup(content)
-                    nodes = soup.findAll('page')
+                    nodes = soup.find_all('page')
                     for node in nodes:
                         fancount = node.fan_count.string
                     cache.set(cache_key, fancount, cache_time)
@@ -161,14 +162,14 @@ class FanCountNode(Node):
         if self.service == "twitter":
             query = "%s/1/users/show/%s.xml"
             xml_path = query % (tw_api_url, self.service_id)
-            cache_key = md5(xml_path).hexdigest()
+            cache_key = md5(xml_path.encode()).hexdigest()
             fancount = cache.get(cache_key)
             if not fancount:
                 try:
-                    xml = urllib2.urlopen(xml_path)
+                    xml = urlopen(xml_path)
                     content = xml.read()
                     soup = BeautifulStoneSoup(content)
-                    nodes = soup.findAll('user')
+                    nodes = soup.find_all('user')
                     for node in nodes:
                         fancount = node.followers_count.string
                     cache.set(cache_key, fancount, cache_time)
@@ -429,7 +430,7 @@ class RssParserNode(Node):
         except:
             pass
 
-        cache_key = md5(self.url).hexdigest()
+        cache_key = md5(self.url.encode()).hexdigest()
         url_content = cache.get(cache_key)
 
         if url_content is None:
@@ -584,9 +585,8 @@ class Md5Hash(Node):
         self.bits = [Variable(bit) for bit in kwargs.get("bits", [])[1:]]
 
     def render(self, context):
-        from hashlib import md5
         bits = [str(b.resolve(context)) for b in self.bits]
-        return md5(".".join(bits)).hexdigest()
+        return md5(".".join(bits).encode()).hexdigest()
 
 @register.tag
 def md5_hash(parser, token):
@@ -609,7 +609,7 @@ class NoWhiteSpaceNode(Node):
 
     def render(self, context):
         text = self.nodelist.render(context).strip()
-        return re.sub('\s{2,}', ' ', text)
+        return re.sub(r'\s{2,}', ' ', text)
 
 @register.tag
 def nowhitespace(parser, token):
@@ -640,7 +640,7 @@ class PhotoImageURL(Node):
 
         # return empty unicode string
         if not photo.pk:
-            return "%s%s" % (getattr(settings, 'STATIC_URL'), getattr(settings, 'DEFAULT_IMAGE_URL'))
+            return static(settings.DEFAULT_IMAGE_URL)
 
         cache_key = generate_image_cache_key(file=str(photo.pk), size=self.size, pre_key="photo", crop=self.crop, unique_key=str(photo.pk), quality=self.quality, constrain=self.constrain)
         cached_image_url = cache.get(cache_key)
@@ -728,7 +728,7 @@ class ImageURL(Node):
             return url
 
         # return the default image url
-        return "%s%s" % (getattr(settings, 'STATIC_URL'), getattr(settings, 'DEFAULT_IMAGE_URL'))
+        return static(settings.DEFAULT_IMAGE_URL)
 
 
 @register.tag

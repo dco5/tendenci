@@ -1,6 +1,7 @@
 import uuid
 
 from django.db import models
+from django.urls import reverse
 from django.contrib.auth.models import User
 from django.utils.translation import ugettext_lazy as _
 
@@ -12,7 +13,8 @@ class Entity(models.Model):
     entity_name = models.CharField(_('Name'), max_length=200, blank=True)
     entity_type = models.CharField(_('Type'), max_length=200, blank=True)
     #entity_parent_id = models.IntegerField(_('Parent ID'), default=0)
-    entity_parent = models.ForeignKey('self', related_name='entity_children', null=True, blank=True)
+    entity_parent = models.ForeignKey('self', related_name='entity_children', null=True, blank=True,
+                                      on_delete=models.SET_NULL)
     # contact info
     contact_name = models.CharField(_('Contact Name'), max_length=200, blank=True)
     phone = models.CharField(max_length=50, blank=True)
@@ -48,15 +50,14 @@ class Entity(models.Model):
         ordering = ("entity_name",)
         app_label='entities'
 
-    @models.permalink
     def get_absolute_url(self):
-        return ("entity", [self.pk])
+        return reverse('entity', args=[self.pk])
 
-    def __unicode__(self):
+    def __str__(self):
         return self.entity_name
 
     def save(self, *args, **kwargs):
         if not self.guid:
-            self.guid = str(uuid.uuid1())
+            self.guid = str(uuid.uuid4())
 
         super(Entity, self).save(*args, **kwargs)

@@ -1,5 +1,8 @@
+from builtins import str
 import uuid
+
 from django.db import models
+#from django.urls import reverse
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.contenttypes.fields import GenericRelation
 
@@ -26,14 +29,13 @@ class Region(TendenciBaseModel):
         verbose_name_plural = _("Regions")
         app_label = 'regions'
 
-    def __unicode__(self):
+    def __str__(self):
         return self.region_name
 
-#    @models.permalink
 #    def get_absolute_url(self):
-#        return ("industry", [self.pk])
+#        return reverse('industry', args=[self.pk])
 
     def save(self, *args, **kwargs):
-        self.guid = self.guid or unicode(uuid.uuid1())
+        self.guid = self.guid or str(uuid.uuid4())
 
         super(Region, self).save(*args, **kwargs)

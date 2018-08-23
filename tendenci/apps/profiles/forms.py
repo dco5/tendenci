@@ -5,11 +5,10 @@ from django import forms
 from django.contrib import auth
 from django.contrib.auth.models import User
 from django.utils.translation import ugettext_lazy as _
-from django.forms.extras.widgets import SelectDateWidget
+from django.forms.widgets import SelectDateWidget
 from django.utils.safestring import mark_safe
 from django.db.models import Q
 
-from tendenci.apps.base.fields import SplitDateTimeField
 from tendenci.apps.base.fields import EmailVerificationField, CountrySelectField
 from tendenci.apps.base.utils import normalize_field_names
 from tendenci.apps.perms.forms import TendenciBaseForm
@@ -85,7 +84,7 @@ class ProfileSearchForm(forms.Form):
             choices += [(mt.id, mt.name) for mt in mts]
             self.fields['membership_type'].widget = forms.widgets.Select(
                                     choices=choices)
-            
+
         # group choices
         filters = get_query_filters(self.user, 'user_groups.view_group', **{'perms_field': False})
         group_choices = [(0, _('SELECT ONE'))] + list(Group.objects.filter(
@@ -94,7 +93,6 @@ class ProfileSearchForm(forms.Form):
                             ).values_list('pk', 'name'))
         self.fields['group'].widget = forms.widgets.Select(
                                     choices=group_choices)
-        
 
 
 class ProfileForm(TendenciBaseForm):
@@ -174,7 +172,7 @@ class ProfileForm(TendenciBaseForm):
     admin_notes = forms.CharField(label=_("Admin Notes"), max_length=1000, required=False,
                                widget=forms.Textarea(attrs={'rows':'3'}))
     language = forms.ChoiceField(initial="en", choices=get_languages_with_local_name())
-    dob = forms.DateField(required=False, widget=SelectDateWidget(None, range(1920, THIS_YEAR)))
+    dob = forms.DateField(required=False, widget=SelectDateWidget(None, list(range(1920, THIS_YEAR))))
 
     status_detail = forms.ChoiceField(
         choices=(('active',_('Active')),('inactive',_('Inactive')), ('pending',_('Pending')),))
@@ -668,7 +666,7 @@ class ValidatingPasswordChangeForm(auth.forms.PasswordChangeForm):
         password_requirements = get_setting('module', 'users', 'password_text')
         if password_regex:
             # At least MIN_LENGTH long
-            # "^(?=.{8,})(?=.*[0-9=]).*$"
+            # r'^(?=.{8,})(?=.*[0-9=]).*$'
             if not re.match(password_regex, password1):
                 raise forms.ValidationError(mark_safe("The new password does not meet the requirements </li><li>%s" % password_requirements))
 
@@ -676,9 +674,9 @@ class ValidatingPasswordChangeForm(auth.forms.PasswordChangeForm):
 
 
 class UserMembershipForm(TendenciBaseForm):
-    join_dt = SplitDateTimeField(label=_('Subscribe Date/Time'),
+    join_dt = forms.SplitDateTimeField(label=_('Subscribe Date/Time'),
         initial=datetime.datetime.now())
-    expire_dt = SplitDateTimeField(label=_('Expire Date/Time'), required=False)
+    expire_dt = forms.SplitDateTimeField(label=_('Expire Date/Time'), required=False)
     status_detail = forms.ChoiceField(
         choices=(('active',_('Active')),('inactive',_('Inactive')), ('pending',_('Pending')),))
 
@@ -804,7 +802,7 @@ class UserUploadForm(forms.ModelForm):
         if not key:
             raise forms.ValidationError(_('Please specify the key to identify duplicates'))
 
-        file_content = upload_file.read()
+        file_content = upload_file.read().decode('utf-8') # decode from bytes to string
         upload_file.seek(0)
         header_line_index = file_content.find('\n')
         header_list = ((file_content[:header_line_index]

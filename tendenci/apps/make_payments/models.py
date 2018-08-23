@@ -3,11 +3,6 @@ from django.db import models
 from django.contrib.auth.models import User
 from django.utils.translation import ugettext_lazy as _
 
-from tendenci.apps.accountings.models import Acct, AcctEntry, AcctTran
-from tendenci.apps.accountings.utils import (make_acct_entries_initial,
-                                             make_acct_entries_closing,
-                                             make_acct_entries_closing_reversing)
-
 class MakePayment(models.Model):
     guid = models.CharField(max_length=50)
     user = models.ForeignKey(User, null=True, on_delete=models.SET_NULL)
@@ -41,12 +36,12 @@ class MakePayment(models.Model):
         verbose_name = _("General Payment")
         verbose_name_plural = _("General Payments")
 
-    def __unicode__(self):
+    def __str__(self):
         return 'Payment'
 
     def save(self, user=None):
         if not self.id:
-            self.guid = str(uuid.uuid1())
+            self.guid = str(uuid.uuid4())
             if user and user.id:
                 self.creator=user
                 self.creator_username=user.username

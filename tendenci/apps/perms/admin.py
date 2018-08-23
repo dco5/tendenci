@@ -1,22 +1,23 @@
-import inspect
 from operator import or_
+from functools import reduce
 
 from django.contrib import admin
 from django.contrib.admin import SimpleListFilter, helpers
 from django.contrib.admin.utils import get_deleted_objects, model_ngettext
 from django.utils.translation import ugettext_lazy as _
-from django.utils.encoding import iri_to_uri, force_unicode
-from django.core.urlresolvers import reverse
+from django.utils.encoding import iri_to_uri, force_text
+from django.urls import reverse
 from django.core.exceptions import PermissionDenied
-from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.db import router
 from django.db.models import Q
 from django.template.response import TemplateResponse
+from django.utils.safestring import mark_safe
 
 from tagging.models import TaggedItem
 from tendenci.apps.event_logs.models import EventLog
 from tendenci.apps.perms.utils import update_perms_and_save
+from tendenci.apps.theme.templatetags.static import static
 
 
 class TendenciBaseModelAdmin(admin.ModelAdmin):
@@ -25,7 +26,7 @@ class TendenciBaseModelAdmin(admin.ModelAdmin):
     """
 
     class Media:
-        js = ('%sjs/global/tinymce.event_handlers.js' % settings.STATIC_URL,)
+        js = (static('js/global/tinymce.event_handlers.js'),)
 
     def __init__(self, *args, **kwargs):
         super(TendenciBaseModelAdmin, self).__init__(*args, **kwargs)
@@ -53,20 +54,21 @@ class TendenciBaseModelAdmin(admin.ModelAdmin):
         return "Edit"
     edit_link.short_description = _('edit')
 
+    @mark_safe
     def view_on_site(self, obj):
         if not hasattr(obj, 'get_absolute_url'):
             return None
 
-        link_icon = '%simages/icons/external_16x16.png' % settings.STATIC_URL
+        link_icon = static('images/icons/external_16x16.png')
         link = '<a href="%s" title="%s"><img src="%s" alt="external_16x16" title="external icon"/></a>' % (
             obj.get_absolute_url(),
             obj,
             link_icon,
         )
         return link
-    view_on_site.allow_tags = True
     view_on_site.short_description = _('view')
 
+    @mark_safe
     def owner_link(self, obj):
         link = ''
         if obj.owner_username:
@@ -76,17 +78,16 @@ class TendenciBaseModelAdmin(admin.ModelAdmin):
                 obj.owner_username,
             )
         return link
-    owner_link.allow_tags = True
     owner_link.short_description = _('owner')
 
+    @mark_safe
     def admin_status(self, obj):
         return obj.obj_status
-    admin_status.allow_tags = True
     admin_status.short_description = _('status')
 
+    @mark_safe
     def admin_perms(self, obj):
         return obj.obj_perms
-    admin_perms.allow_tags = True
     admin_perms.short_description = _('permission')
 
     def save_model(self, request, object, form, change):
@@ -115,7 +116,7 @@ class TendenciBaseModelAdmin(admin.ModelAdmin):
         return result
 
     def log_deletion(self, request, object, object_repr):
-        application = inspect.getmodule(self).__name__
+        #application = inspect.getmodule(self).__name__
         super(TendenciBaseModelAdmin, self).log_deletion(request, object, object_repr)
 
 
@@ -154,7 +155,7 @@ def soft_delete_selected(modeladmin, request, queryset):
         n = queryset.count()
         if n:
             for obj in queryset:
-                obj_display = force_unicode(obj)
+                obj_display = force_text(obj)
                 modeladmin.log_deletion(request, obj, obj_display)
 
                 # Delete the object with it's own method in case the
@@ -167,9 +168,9 @@ def soft_delete_selected(modeladmin, request, queryset):
         return None
 
     if len(queryset) == 1:
-        objects_name = force_unicode(opts.verbose_name)
+        objects_name = force_text(opts.verbose_name)
     else:
-        objects_name = force_unicode(opts.verbose_name_plural)
+        objects_name = force_text(opts.verbose_name_plural)
 
     if perms_needed or protected:
         title = _("Cannot delete %(name)s") % {"name": objects_name}
@@ -189,11 +190,12 @@ def soft_delete_selected(modeladmin, request, queryset):
     }
 
     # Display the confirmation page
-    return TemplateResponse(request, [
+    request.current_app = modeladmin.admin_site.name
+    return TemplateResponse(request=request, template=[
         "admin/%s/%s/soft_delete_selected_confirmation.html" % (app_label, opts.object_name.lower()),
         "admin/%s/soft_delete_selected_confirmation.html" % app_label,
         "admin/soft_delete_selected_confirmation.html"
-    ], context, current_app=modeladmin.admin_site.name)
+    ], context=context)
 
 soft_delete_selected.short_description = _("Delete selected %(verbose_name_plural)s")
 

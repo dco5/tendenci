@@ -1,24 +1,22 @@
-
+from builtins import str
 from csv import writer
 from datetime import datetime
-from mimetypes import guess_type
 
-
-from django.conf import settings
-from django.conf.urls import patterns, url
+from django.conf.urls import url
 from django.contrib import admin
 from django.contrib.admin.utils import unquote
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.http import HttpResponse, Http404
 from django.shortcuts import get_object_or_404
 from django.template.defaultfilters import slugify
 from django.utils.translation import ugettext_lazy as _
+from django.utils.safestring import mark_safe
 
 from tendenci.apps.perms.admin import TendenciBaseModelAdmin
 from tendenci.apps.site_settings.utils import get_setting
-
+from tendenci.apps.theme.templatetags.static import static
 from tendenci.apps.forms_builder.forms.models import Form, Field, FormEntry, FieldEntry, Pricing
 from tendenci.apps.forms_builder.forms.forms import FormAdminForm, FormForField, PricingForm
 
@@ -103,20 +101,20 @@ class FormAdmin(TendenciBaseModelAdmin):
         js = (
             '//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js',
             '//ajax.googleapis.com/ajax/libs/jqueryui/1.11.0/jquery-ui.min.js',
-            '%sjs/global/tinymce.event_handlers.js' % settings.STATIC_URL,
-            '%sjs/admin/form-fields-inline-ordering.js' % settings.STATIC_URL,
-            '%sjs/admin/form-field-dynamic-hiding.js' % settings.STATIC_URL,
-            '%sjs/admin/form-position.js' % settings.STATIC_URL,
-            '%sjs/admin/tax_fields.js' % settings.STATIC_URL,
+            static('js/global/tinymce.event_handlers.js'),
+            static('js/admin/form-fields-inline-ordering.js'),
+            static('js/admin/form-field-dynamic-hiding.js'),
+            static('js/admin/form-position.js'),
+            static('js/admin/tax_fields.js'),
         )
-        css = {'all': ['%scss/admin/dynamic-inlines-with-sort.css' % settings.STATIC_URL], }
+        css = {'all': [static('css/admin/dynamic-inlines-with-sort.css')], }
 
+    @mark_safe
     def export_all_link(self, obj):
         link = '-----'
         if obj.has_files():
             link = '<a href="%s" title="Export all">Export entries (including uploaded files)</a>' % reverse('form_entries_export_full', args=[obj.pk])
         return link
-    export_all_link.allow_tags = True
     export_all_link.short_description = ''
 
     def change_view(self, request, object_id, form_url='', extra_context=None):
@@ -142,14 +140,14 @@ class FormAdmin(TendenciBaseModelAdmin):
         Add the export view to urls.
         """
         urls = super(FormAdmin, self).get_urls()
-        extra_urls = patterns("",
-            url("^export/(?P<form_id>\d+)/$",
+        extra_urls = [
+            url(r'^export/(?P<form_id>\d+)/$',
                 self.admin_site.admin_view(self.export_view),
                 name="forms_form_export"),
-            url("^file/(?P<field_entry_id>\d+)/$",
+            url(r'^file/(?P<field_entry_id>\d+)/$',
                 self.admin_site.admin_view(self.file_view),
                 name="forms_form_file"),
-        )
+        ]
         return extra_urls + urls
 
     def export_view(self, request, form_id):
@@ -169,16 +167,16 @@ class FormAdmin(TendenciBaseModelAdmin):
         field_indexes = {}
         file_field_ids = []
         for field in form.fields.all().order_by('position', 'id'):
-            columns.append(field.label.encode("utf-8"))
+            columns.append(field.label)
             field_indexes[field.id] = len(field_indexes)
             if field.field_type == "FileField":
                 file_field_ids.append(field.id)
         entry_time_name = FormEntry._meta.get_field("entry_time").verbose_name
-        columns.append(unicode(entry_time_name))
+        columns.append(str(entry_time_name))
         if form.custom_payment:
-            columns.append(unicode("Pricing"))
-            columns.append(unicode("Price"))
-            columns.append(unicode("Payment Method"))
+            columns.append(str("Pricing"))
+            columns.append(str("Price"))
+            columns.append(str("Payment Method"))
         csv.writerow(columns)
         # Loop through each field value order by entry, building up each
         # entry as a row.
@@ -201,7 +199,7 @@ class FormAdmin(TendenciBaseModelAdmin):
                 row[-1] = entry_time
 
             for field_entry in values:
-                value = field_entry.value.encode("utf-8")
+                value = field_entry.value
                 # Create download URL for file fields.
                 if field_entry.field_id in file_field_ids:
                     url = reverse("admin:forms_form_file", args=(field_entry.id,))

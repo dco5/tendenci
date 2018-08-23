@@ -1,13 +1,13 @@
 from tendenci.apps.registry.sites import site
-from tendenci.apps.registry.base import CoreRegistry, lazy_reverse
+from tendenci.apps.registry.base import CoreRegistry
 from tendenci.apps.boxes.models import Box
 from django.utils.translation import ugettext_lazy as _
 
 
 class BoxRegistry(CoreRegistry):
     version = '1.0'
-    author = _('Schipul - The Web Marketing Company')
-    author_email = 'programmers@schipul.com'
+    author = _('Tendenci - The Open Source AMS for Associations')
+    author_email = 'programmers@tendenci.com'
     description = _('Create boxes that allow editable areas in the site theme')
 
     event_logs = {

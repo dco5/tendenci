@@ -1,11 +1,11 @@
 import uuid
-from django.db import models, connection
+from django.db import models
+from django.urls import reverse
 from django.contrib.auth.models import Group as AuthGroup
 from django.contrib.auth.models import User, Permission
 from django.utils.translation import ugettext_lazy as _
 from django.template.defaultfilters import slugify
 from django.db.utils import IntegrityError
-from django.core.urlresolvers import reverse
 
 from tendenci.apps.base.fields import SlugField
 from tendenci.apps.perms.models import TendenciBaseModel
@@ -45,7 +45,7 @@ class Group(TendenciBaseModel):
     notes = models.TextField(blank=True)
     members = models.ManyToManyField(User, through='GroupMembership')
 
-    group = models.OneToOneField(AuthGroup, null=True, default=None)
+    group = models.OneToOneField(AuthGroup, null=True, default=None, on_delete=models.CASCADE)
     permissions = models.ManyToManyField(Permission, related_name='group_permissions', blank=True)
     # use_for_membership = models.BooleanField(_('User for Membership Only'), default=0, blank=True)
 
@@ -58,16 +58,15 @@ class Group(TendenciBaseModel):
         ordering = ("name",)
         app_label = 'user_groups'
 
-    def __unicode__(self):
+    def __str__(self):
         return self.label or self.name
 
-    @models.permalink
     def get_absolute_url(self):
-        return ('group.detail', [self.slug])
+        return reverse('group.detail', args=[self.slug])
 
     def save(self, force_insert=False, force_update=False, *args, **kwargs):
         if not self.guid:
-            self.guid = uuid.uuid1()
+            self.guid = uuid.uuid4()
 
         if not self.slug:
             self.slug = slugify(self.name)
@@ -143,6 +142,9 @@ class Group(TendenciBaseModel):
 
         return user, False
 
+    def remove_user(self, user, **kwargs):
+        if self.is_member(user):
+            GroupMembership.objects.get(group=self, member=user).delete()
 
 class GroupMembership(models.Model):
 
@@ -153,8 +155,8 @@ class GroupMembership(models.Model):
         (STATUS_INACTIVE, 'Inactive'),
     )
 
-    group = models.ForeignKey(Group)
-    member = models.ForeignKey(User, related_name='group_member')
+    group = models.ForeignKey(Group, on_delete=models.CASCADE)
+    member = models.ForeignKey(User, related_name='group_member', on_delete=models.CASCADE)
 
     role = models.CharField(max_length=255, default="", blank=True)
     sort_order =  models.IntegerField(_('Sort Order'), default=0, blank=True)
@@ -178,7 +180,7 @@ class GroupMembership(models.Model):
     is_newsletter_subscribed = models.BooleanField(default=True)
     newsletter_key = models.CharField(max_length=50, null=True, blank=True) # will be the secret key for unsubscribe
 
-    def __unicode__(self):
+    def __str__(self):
         return self.group.name
 
     class Meta:
@@ -214,11 +216,11 @@ class GroupMembership(models.Model):
         if not self.is_newsletter_subscribed:
             self.is_newsletter_subscribed = True
             # change newsletter_key when subscribing
-            self.newsletter_key = uuid.uuid1()
+            self.newsletter_key = uuid.uuid4()
             self.save()
             return True
         elif self.newsletter_key is None:
-            self.newsletter_key = uuid.uuid1()
+            self.newsletter_key = uuid.uuid4()
             self.save()
             return True
         return False
@@ -227,7 +229,7 @@ class GroupMembership(models.Model):
         if self.is_newsletter_subscribed:
             self.is_newsletter_subscribed = False
             # change newsletter_key when unsubscribing
-            self.newsletter_key = uuid.uuid1()
+            self.newsletter_key = uuid.uuid4()
             self.save()
             return True
 
@@ -237,7 +239,7 @@ class GroupMembership(models.Model):
     def noninteractive_unsubscribe_url(self):
         site_url = get_setting('site', 'global', 'siteurl')
         if not self.newsletter_key:
-            self.newsletter_key = uuid.uuid1()
+            self.newsletter_key = uuid.uuid4()
             self.save()
         unsubscribe_path = reverse('group.newsletter_unsubscribe_noninteractive', kwargs={
             'group_slug': self.group.slug,

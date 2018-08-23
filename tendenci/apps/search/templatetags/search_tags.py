@@ -1,7 +1,5 @@
 from django.template import TemplateSyntaxError, TemplateDoesNotExist, Variable
 from django.template import Library
-from django.conf import settings
-from django.template.loader import get_template
 from django.template.loader_tags import IncludeNode
 from django.utils.translation import ugettext_lazy as _
 from haystack.models import SearchResult
@@ -64,22 +62,19 @@ class SearchResultNode(IncludeNode):
                 result_object = result
 
             try:
-                t = get_template(template_name)
-            except TemplateDoesNotExist:
+                t = context.template.engine.get_template(template_name)
+            except (TemplateDoesNotExist, IOError):
                 #load the default search result template
-                t = get_template("search/search-result.html")
+                t = context.template.engine.get_template("search/search-result.html")
 
             context.update({
                 "result": result,
                 var_name: result_object,
             })
 
-            return t.render(context)
+            return t.render(context=context)
         except:
-            if settings.TEMPLATE_DEBUG:
-                raise
             return ''
-
 
 def search_result(parser, token):
     """

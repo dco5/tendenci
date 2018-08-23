@@ -27,12 +27,12 @@ def make_payment_inv_add(user, make_payment, **kwargs):
     inv.ship_to_company = make_payment.company
     inv.ship_to_address = '%s %s' % (make_payment.address,
                                      make_payment.address2)
-    inv.ship_to_city = make_payment.city
-    inv.ship_to_state = make_payment.state
-    inv.ship_to_zip_code =  make_payment.zip_code
-    inv.ship_to_country = make_payment.country
-    inv.ship_to_phone =  make_payment.phone
-    inv.ship_to_email = make_payment.email
+    inv.ship_to_city = make_payment.city or ''
+    inv.ship_to_state = make_payment.state or ''
+    inv.ship_to_zip_code =  make_payment.zip_code or ''
+    inv.ship_to_country = make_payment.country or ''
+    inv.ship_to_phone =  make_payment.phone or ''
+    inv.ship_to_email = make_payment.email or ''
     inv.terms = "Due on Receipt"
     inv.due_date = datetime.now()
     inv.ship_date = datetime.now()
@@ -47,7 +47,7 @@ def make_payment_inv_add(user, make_payment, **kwargs):
     inv.total = make_payment.payment_amount
     inv.balance = make_payment.payment_amount
 
-    if user and not user.is_anonymous():
+    if user and not user.is_anonymous:
         inv.set_creator(user)
         inv.set_owner(user)
 
@@ -59,18 +59,16 @@ def make_payment_inv_add(user, make_payment, **kwargs):
     return inv
 
 def make_payment_email_user(request, make_payment, invoice, **kwargs):
-    from django.core.mail.message import EmailMessage
     from django.template.loader import render_to_string
     from django.conf import settings
-    from django.template import RequestContext
 
-    subject = render_to_string('make_payments/email_user_subject.txt',
-                               {'make_payment':make_payment},
-                               context_instance=RequestContext(request))
+    subject = render_to_string(template_name='make_payments/email_user_subject.txt',
+                               context={'make_payment':make_payment},
+                               request=request)
     subject = subject.replace('\n', ' ')
-    body = render_to_string('make_payments/email_user.txt', {'make_payment':make_payment,
+    body = render_to_string(template_name='make_payments/email_user.txt', context={'make_payment':make_payment,
                                                              'invoice':invoice},
-                                                             context_instance=RequestContext(request))
+                                                             request=request)
     sender = settings.DEFAULT_FROM_EMAIL
     recipient = make_payment.email
     email = Email(

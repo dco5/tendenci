@@ -1,15 +1,16 @@
+from builtins import str
 import os
 import hashlib
 import uuid
 import time
-from copy import deepcopy
 from functools import partial
 from datetime import datetime, timedelta
 from dateutil.relativedelta import relativedelta
 
 from django.db import models
+from django.urls import reverse
 from django.db.models.query_utils import Q
-from django.template import Context, Template
+from django.template import engines
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.auth.models import User, AnonymousUser
 from django.contrib.contenttypes.models import ContentType
@@ -17,10 +18,7 @@ from django import forms
 from importlib import import_module
 from django.utils.safestring import mark_safe
 from django.core.files.storage import default_storage
-from django.utils.encoding import smart_str
-from django.core.urlresolvers import reverse
 from django.template.loader import render_to_string
-from django.template import RequestContext
 from django.db.models.fields import AutoField
 
 from tendenci.apps.base.utils import day_validate, is_blank, tcurrency
@@ -48,8 +46,8 @@ from tendenci.apps.regions.models import Region
 from tendenci.apps.base.utils import UnicodeWriter
 
 # from south.modelsinspector import add_introspection_rules
-# add_introspection_rules([], ["^tinymce.models.HTMLField"])
-# add_introspection_rules([], ["^tendenci.apps.base.fields.SlugField"])
+# add_introspection_rules([], [r'^tinymce\.models\.HTMLField'])
+# add_introspection_rules([], [r'^tendenci\.apps\.base\.fields\.SlugField'])
 
 FIELD_CHOICES = (
     ("text", _("Text")),
@@ -119,7 +117,8 @@ class MembershipType(OrderingBaseModel, TendenciBaseModel):
         help_text=_("Admin fee for the first time processing"))
 
     group = models.ForeignKey(Group, related_name="membership_types",
-        help_text=_("Members joined will be added to this group"))
+        help_text=_("Members joined will be added to this group"),
+        on_delete=models.CASCADE)
 
     require_approval = models.BooleanField(_('Require Approval'), default=True)
     require_payment_approval = models.BooleanField(
@@ -168,7 +167,7 @@ class MembershipType(OrderingBaseModel, TendenciBaseModel):
         permissions = (("view_membershiptype", _("Can view membership type")),)
         app_label = 'memberships'
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
     def save(self, *args, **kwargs):
@@ -176,7 +175,7 @@ class MembershipType(OrderingBaseModel, TendenciBaseModel):
         Save GUID if GUID is not set.
         Save MembershipType instance.
         """
-        self.guid = self.guid or uuid.uuid1().get_hex()
+        self.guid = self.guid or uuid.uuid4().hex
         super(MembershipType, self).save(*args, **kwargs)
 
     def get_expiration_dt(self, renewal=False, join_dt=None, renew_dt=None, previous_expire_dt=None):
@@ -347,7 +346,7 @@ class MembershipType(OrderingBaseModel, TendenciBaseModel):
         return mark_safe(price_display)
 
 class MembershipSet(models.Model):
-    invoice = models.ForeignKey(Invoice)
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE)
     donation_amount = models.DecimalField(max_digits=15, decimal_places=2, blank=True, default=0)
 
     class Meta:
@@ -357,7 +356,8 @@ class MembershipSet(models.Model):
 
     @property
     def group(self):
-        return self.memberships()[0].group
+        [membership] = self.memberships()[:1] or [None]
+        return membership and membership.group
 
     @property
     def membership_type(self):
@@ -472,8 +472,8 @@ class MembershipDefault(TendenciBaseModel):
     guid = models.CharField(max_length=50, editable=False)
     lang = models.CharField(max_length=10, editable=False, default='eng')
     member_number = models.CharField(max_length=50, blank=True)
-    membership_type = models.ForeignKey(MembershipType)
-    user = models.ForeignKey(User, editable=False)
+    membership_type = models.ForeignKey(MembershipType, on_delete=models.CASCADE)
+    user = models.ForeignKey(User, editable=False, on_delete=models.CASCADE)
     renewal = models.BooleanField(blank=True, default=False)
     auto_renew = models.BooleanField(blank=True, default=False)
     renew_from_id = models.IntegerField(blank=True, null=True)
@@ -499,34 +499,40 @@ class MembershipDefault(TendenciBaseModel):
     application_abandoned = models.BooleanField(default=False)
     application_abandoned_dt = models.DateTimeField(null=True, default=None)
     application_abandoned_user = models.ForeignKey(
-        User, related_name='application_abandond_set', null=True)
+        User, related_name='application_abandond_set', null=True,
+        on_delete=models.SET_NULL)
 
     application_complete = models.BooleanField(default=True)
     application_complete_dt = models.DateTimeField(null=True, default=None)
     application_complete_user = models.ForeignKey(
-        User, related_name='application_complete_set', null=True)
+        User, related_name='application_complete_set', null=True,
+        on_delete=models.SET_NULL)
 
     application_approved = models.BooleanField(default=False)
     application_approved_dt = models.DateTimeField(null=True, default=None)
     application_approved_user = models.ForeignKey(
-        User, related_name='application_approved_set', null=True)
+        User, related_name='application_approved_set', null=True,
+        on_delete=models.SET_NULL)
 
     application_approved_denied_dt = models.DateTimeField(null=True, default=None)
     application_approved_denied_user = models.ForeignKey(
-        User, related_name='application_approved_denied_set', null=True)
+        User, related_name='application_approved_denied_set', null=True,
+        on_delete=models.SET_NULL)
 
     application_denied = models.BooleanField(default=False)
 
     action_taken = models.CharField(max_length=500, blank=True)
     action_taken_dt = models.DateTimeField(null=True, default=None)
     action_taken_user = models.ForeignKey(
-        User, related_name='action_taken_set', null=True)
+        User, related_name='action_taken_set', null=True,
+        on_delete=models.SET_NULL)
     # workflow fields -----------------------------------------
 
     bod_dt = models.DateTimeField(null=True)
     personnel_notified_dt = models.DateTimeField(null=True)
     payment_received_dt = models.DateTimeField(null=True)
-    payment_method = models.ForeignKey(PaymentMethod, null=True)
+    payment_method = models.ForeignKey(PaymentMethod, null=True,
+                                       on_delete=models.SET_NULL)
     override = models.BooleanField(default=False)
     override_price = models.FloatField(null=True)
     exported = models.BooleanField(default=False)
@@ -543,14 +549,14 @@ class MembershipDefault(TendenciBaseModel):
     government_agency = models.CharField(max_length=250, blank=True, default=u'')
     license_number = models.CharField(max_length=50, blank=True, default=u'')
     license_state = models.CharField(max_length=50, blank=True, default=u'')
-    industry = models.ForeignKey(Industry, blank=True, null=True)
-    region = models.ForeignKey(Region, blank=True, null=True)
+    industry = models.ForeignKey(Industry, blank=True, null=True, on_delete=models.SET_NULL)
+    region = models.ForeignKey(Region, blank=True, null=True, on_delete=models.SET_NULL)
     company_size = models.CharField(max_length=50, blank=True, default=u'')
     promotion_code = models.CharField(max_length=50, blank=True, default=u'')
-    directory = models.ForeignKey(Directory, blank=True, null=True)
+    directory = models.ForeignKey(Directory, blank=True, null=True, on_delete=models.SET_NULL)
     groups = models.ManyToManyField(Group)
 
-    membership_set = models.ForeignKey(MembershipSet, blank=True, null=True)
+    membership_set = models.ForeignKey(MembershipSet, blank=True, null=True, on_delete=models.CASCADE)
     app = models.ForeignKey("MembershipApp", null=True, on_delete=models.SET_NULL)
 
     objects = MembershipDefaultManager()
@@ -561,13 +567,12 @@ class MembershipDefault(TendenciBaseModel):
         permissions = (("approve_membershipdefault", _("Can approve memberships")),)
         app_label = 'memberships'
 
-
     def __init__(self, *args, **kwargs):
         super(MembershipDefault, self).__init__(*args, **kwargs)
         if not self.auto_renew:
             self.auto_renew = False
 
-    def __unicode__(self):
+    def __str__(self):
         """
         Returns summary of membership object
         """
@@ -577,22 +582,19 @@ class MembershipDefault(TendenciBaseModel):
 
         return u
 
-    @models.permalink
     def get_absolute_url(self):
         """
         Returns admin change_form page.
         """
-        return ('membership.details', [self.pk])
-        # return ('admin:memberships_membershipdefault_change', [self.pk])
+        return reverse('membership.details', args=[self.pk])
+        #return reverse('admin:memberships_membershipdefault_change', args=[self.pk])
 
-    @models.permalink
     def get_current_membership_url(self):
         """
         Returns link to url of the most current membership.
         """
         memberships = self.user.membershipdefault_set.filter(membership_type=self.membership_type).order_by('-id')
-
-        return ('membership.details', [memberships[0].pk])
+        return reverse('membership.details', args=[memberships[0].pk])
 
     @property
     def group(self):
@@ -602,7 +604,7 @@ class MembershipDefault(TendenciBaseModel):
         """
         Set GUID if not already set.
         """
-        self.guid = self.guid or uuid.uuid1().get_hex()
+        self.guid = self.guid or uuid.uuid4().hex
         # set the status_detail to pending if not specified
         # the default 'active' is causing problems
         if not self.status_detail:
@@ -650,7 +652,8 @@ class MembershipDefault(TendenciBaseModel):
 
         demographic = self.demographics
 
-        field_names = demographic._meta.get_all_field_names()
+        field_names = [f.name for f in demographic._meta.get_fields()
+                       if not (f.many_to_one and f.related_model is None)]
         field_names.sort(key=self.demographic_sort_key)  # sort by ud number
 
         field_dict = {}
@@ -667,7 +670,7 @@ class MembershipDefault(TendenciBaseModel):
                     data = getattr(demographic, field_name)
                     try:
                         is_file = eval(data).get('type') == u'file'
-                    except Exception as e:
+                    except Exception:
                         is_file = False
 
                     if is_file:
@@ -675,7 +678,7 @@ class MembershipDefault(TendenciBaseModel):
                     else:
                         field_list.append((field_label, data))
 
-        if is_blank(dict(field_list).values()):
+        if is_blank(list(dict(field_list).values())):
             return []  # empty list
 
         return field_list
@@ -827,14 +830,12 @@ class MembershipDefault(TendenciBaseModel):
                 for rep in reps:
                     params.update({'user': rep.user})
                     subject = render_to_string(
-                        'memberships/notices/email_corp_reps_subject.html',
-                        params,
-                        context_instance=RequestContext(request))
+                        template_name='memberships/notices/email_corp_reps_subject.html',
+                        context=params)
                     subject = subject.strip('\n').strip('\r')
                     body = render_to_string(
-                                'memberships/notices/email_corp_reps_body.html',
-                                params,
-                                context_instance=RequestContext(request))
+                                template_name='memberships/notices/email_corp_reps_body.html',
+                                context=params)
 
                     email = Email(recipient=rep.user.email,
                                   subject=subject,
@@ -873,7 +874,7 @@ class MembershipDefault(TendenciBaseModel):
         self.application_approved_dt = \
             self.application_approved_dt or NOW
 
-        if request_user and request_user.is_authenticated():  # else: don't set
+        if request_user and request_user.is_authenticated:  # else: don't set
             self.application_approved_user = request_user
             self.application_approved_denied_user = request_user
             self.action_taken_user = request_user
@@ -910,8 +911,8 @@ class MembershipDefault(TendenciBaseModel):
             self.user.is_active = True
             self.user.save()
             send_welcome_email(self.user)
-        
-        if not self.renewal: 
+
+        if not self.renewal:
             # add new member to the default group
             default_group_name = get_setting('module', 'users', 'defaultusergroup')
             [group] = Group.objects.filter(Q(name__iexact=default_group_name)
@@ -940,7 +941,7 @@ class MembershipDefault(TendenciBaseModel):
         else:
             return False
 
-        dupe.status = True,
+        dupe.status = True
         dupe.status_detail = 'active'
 
         dupe.renewal = True
@@ -951,7 +952,7 @@ class MembershipDefault(TendenciBaseModel):
         dupe.application_approved = True
         dupe.application_approved_dt = NOW
 
-        if request_user and not request_user.is_anonymous():  # else: don't set
+        if request_user and not request_user.is_anonymous:  # else: don't set
             dupe.application_approved_user = request_user
             dupe.application_approved_denied_user = request_user
             dupe.action_taken_user = request_user
@@ -1001,7 +1002,7 @@ class MembershipDefault(TendenciBaseModel):
 
         NOW = datetime.now()
 
-        self.status = True,
+        self.status = True
         self.status_detail = 'disapproved'
 
         # application approved/denied ---------------
@@ -1088,7 +1089,7 @@ class MembershipDefault(TendenciBaseModel):
         if self.status_detail == 'archive':
             return False
 
-        self.status = True,
+        self.status = True
         self.status_detail = 'pending'
 
         # application approved ---------------
@@ -1335,7 +1336,7 @@ class MembershipDefault(TendenciBaseModel):
             user = User.objects.create_user(**{
                 'username': un or spawn_username(fn[:1], ln),
                 'email': em,
-                'password': pw or hashlib.sha1(em).hexdigest()[:6],
+                'password': pw or hashlib.sha1(em.encode()).hexdigest()[:6]
             })
 
             user.first_name = fn
@@ -1508,7 +1509,7 @@ class MembershipDefault(TendenciBaseModel):
         elif status == 'expired':
             actions.update({
                 approve_link: u'Approve Membership'})
-        
+
         return actions
 
     def get_invoice(self):
@@ -1569,7 +1570,7 @@ class MembershipDefault(TendenciBaseModel):
                 invoice.tax_rate = self.app.tax_rate
                 tax = self.app.tax_rate * price
                 invoice.tax = tax
-            
+
             invoice.subtotal = price
             invoice.total = price + tax
             invoice.balance = price + tax
@@ -1836,10 +1837,9 @@ class MembershipDefault(TendenciBaseModel):
                 elif hasattr(self, field_name):
                     items[field_name] = getattr(self, field_name)
 
-            for name, value in items.iteritems():
+            for name, value in items.items():
                 if hasattr(value, 'all'):
-                    items[name] = ', '.join([item.__unicode__()
-                                             for item in value.all()])
+                    items[name] = ', '.join([str(item) for item in value.all()])
 
         return items
 
@@ -1852,6 +1852,7 @@ class MembershipDefault(TendenciBaseModel):
                     pk=self.corporate_membership_id)[:1] or [None]
         return corp_memb
 
+    @mark_safe
     def membership_type_link(self):
         link = '<a href="%s">%s</a>' % (
                 reverse('admin:memberships_membershiptype_change',
@@ -1867,7 +1868,6 @@ class MembershipDefault(TendenciBaseModel):
                             args=[self.corporate_membership_id]),
                     corp_member.status_detail)
         return link
-    membership_type_link.allow_tags = True
     membership_type_link.short_description = u'Membership Type'
 
     def auto_update_paid_object(self, request, payment):
@@ -1912,7 +1912,7 @@ class MembershipDefault(TendenciBaseModel):
             if self.corporate_membership_id:
                 # notify corp reps
                 self.email_corp_reps(request)
-                
+
         if self.auto_renew:
             # add recurring payment entry here
             params = {'trans_id': payment.trans_id}
@@ -1940,26 +1940,26 @@ class MembershipDefault(TendenciBaseModel):
     def get_acct_number(self, discount=False):
         # reference: /accountings/account_numbers/
         return 464700 if discount else 404700
-    
+
     def has_rp(self, platform=''):
         """
         Check if this membership has a recurring payment account for membership renew
         """
         if get_setting('module', 'recurring_payments', 'enabled'):
-            rps = self.user.recurring_payments.filter(status=True, 
+            rps = self.user.recurring_payments.filter(status=True,
                                                      status_detail='active',
                                                      object_content_type__model='membershipdefault')
             if platform:
                 rps = rps.filter(platform=platform)
-            
+
             return rps.exists()
-        
+
         return False
-    
+
     def get_or_create_rp(self, request_user, **kwargs):
         """
         Get or create recurring payment entry
-        """ 
+        """
         from tendenci.apps.recurring_payments.models import RecurringPayment
         if get_setting('module', 'recurring_payments', 'enabled'):
             ct = ContentType.objects.get_for_model(MembershipDefault)
@@ -1967,7 +1967,7 @@ class MembershipDefault(TendenciBaseModel):
                                        status=True,
                                        status_detail__in=['active', 'disabled'])[:1] or [None]
             if not rp:
-                if not request_user or request_user.is_anonymous():
+                if not request_user or request_user.is_anonymous:
                     request_user = self.user
                 rp = RecurringPayment(user=self.user,
                                      object_content_type=ct,
@@ -1991,7 +1991,6 @@ class MembershipDefault(TendenciBaseModel):
                         rp.create_customer_profile_from_trans_id(trans_id)
             return rp
         return None
-    
 
     def next_auto_renew_date(self):
         if self.status_detail != 'archive' and self.expire_dt and self.auto_renew:
@@ -2000,8 +1999,7 @@ class MembershipDefault(TendenciBaseModel):
             else:
                 return datetime.now() + timedelta(days=1)
         return None
- 
-    
+
     def can_auto_renew(self):
         """
         Check if membership auto renew can be set up for this membership.
@@ -2013,14 +2011,13 @@ class MembershipDefault(TendenciBaseModel):
                     return True
         return False
 
-
     # def custom_fields(self):
     #     return self.membershipfield_set.order_by('field__position')
 
 
 def get_import_file_path(instance, filename):
     return "imports/memberships/{uuid}/{filename}".format(
-                            uuid=uuid.uuid1().get_hex()[:8],
+                            uuid=uuid.uuid4().hex[:8],
                             filename=filename)
 
 
@@ -2043,7 +2040,7 @@ class MembershipImport(models.Model):
         ('completed', _('Completed')),
     )
 
-#     app = models.ForeignKey('App', null=True)
+#     app = models.ForeignKey('App', null=True, on_delete=models.CASCADE)
     upload_file = models.FileField(_("Upload File"), max_length=260,
                                    upload_to=get_import_file_path,
                                    null=True)
@@ -2080,7 +2077,7 @@ class MembershipImport(models.Model):
 
         return File.objects.get_for_model(self)[0]
 
-    def __unicode__(self):
+    def __str__(self):
         return self.get_file().file.name
 
     def generate_recap(self):
@@ -2103,7 +2100,6 @@ class MembershipImport(models.Model):
                 data_dict = idata.row_data
                 row = [data_dict[k] for k in header_row if k in data_dict]
                 row.extend([idata.action_taken, idata.error])
-                row = [smart_str(s).decode('utf-8') for s in row]
                 recap_writer.writerow(row)
 
             f.close()
@@ -2112,7 +2108,7 @@ class MembershipImport(models.Model):
 
 
 class MembershipImportData(models.Model):
-    mimport = models.ForeignKey(MembershipImport, related_name="membership_import_data")
+    mimport = models.ForeignKey(MembershipImport, related_name="membership_import_data", on_delete=models.CASCADE)
     # dictionary object representing a row in csv
     row_data = DictField(_('Row Data'))
     # the original row number in the uploaded csv file
@@ -2172,10 +2168,8 @@ class Notice(models.Model):
         "MembershipType",
         blank=True,
         null=True,
-        help_text=_("Note that if you \
-            don't select a membership type, \
-            the notice will go out to all members."
-    ))
+        help_text=_("Note that if you don't select a membership type, the notice will go out to all members."),
+        on_delete=models.CASCADE)
 
     subject = models.CharField(max_length=255)
     content_type = models.CharField(_("Content Type"),
@@ -2199,7 +2193,7 @@ class Notice(models.Model):
     class Meta:
         app_label = 'memberships'
 
-    def __unicode__(self):
+    def __str__(self):
         return self.notice_name
 
     def get_default_context(self, membership=None):
@@ -2300,12 +2294,11 @@ class Notice(models.Model):
         In the future, maybe we can pull from the membership application entry
         """
         content = fieldify(content)
-        template = Template(content)
+        template = engines['django'].from_string(content)
 
         context = kwargs.get('context') or {}
-        context = Context(context)
 
-        return template.render(context)
+        return template.render(context=context)
 
     @classmethod
     def log_notices(cls, memberships, **kwargs):
@@ -2355,7 +2348,7 @@ class Notice(models.Model):
         if not isinstance(membership, MembershipDefault):
             return False
 
-        if isinstance(emails, basestring):
+        if isinstance(emails, str):
             emails = [emails]  # expecting list of emails
 
         # allowed notice types
@@ -2415,18 +2408,17 @@ class Notice(models.Model):
 
         return True
 
-    @models.permalink
     def get_absolute_url(self):
-        return ('membership.notice_email_content', [self.pk])
+        return reverse('membership.notice_email_content', args=[self.pk])
 
     def save(self, *args, **kwargs):
-        self.guid = self.guid or unicode(uuid.uuid1())
+        self.guid = self.guid or str(uuid.uuid4())
         super(Notice, self).save(*args, **kwargs)
 
 
 class NoticeLog(models.Model):
     guid = models.CharField(max_length=50, editable=False)
-    notice = models.ForeignKey(Notice, related_name="logs")
+    notice = models.ForeignKey(Notice, related_name="logs", on_delete=models.CASCADE)
     notice_sent_dt = models.DateTimeField(auto_now_add=True)
     num_sent = models.IntegerField()
 
@@ -2437,9 +2429,11 @@ class NoticeLog(models.Model):
 class NoticeDefaultLogRecord(models.Model):
     guid = models.CharField(max_length=50, editable=False)
     notice_log = models.ForeignKey(NoticeLog,
-                                   related_name="default_log_records")
+                                   related_name="default_log_records",
+                                   on_delete=models.CASCADE)
     membership = models.ForeignKey(MembershipDefault,
-                                   related_name="default_log_records")
+                                   related_name="default_log_records",
+                                   on_delete=models.CASCADE)
     action_taken = models.BooleanField(default=False)
     action_taken_dt = models.DateTimeField(blank=True, null=True)
     create_dt = models.DateTimeField(auto_now_add=True)
@@ -2481,16 +2475,15 @@ class MembershipApp(TendenciBaseModel):
         permissions = (("view_app", _("Can view membership application")),)
         app_label = 'memberships'
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
-    @models.permalink
     def get_absolute_url(self):
-        return ('membership_default.add', [self.slug])
+        return reverse('membership_default.add', args=[self.slug])
 
     def save(self, *args, **kwargs):
         if not self.id:
-            self.guid = str(uuid.uuid1())
+            self.guid = str(uuid.uuid4())
         super(MembershipApp, self).save(*args, **kwargs)
 
     def clone(self):
@@ -2511,11 +2504,11 @@ class MembershipApp(TendenciBaseModel):
 
         return app_cloned
 
+    @mark_safe
     def application_form_link(self):
         return '<a href="%s">%s</a>' % (
             self.get_absolute_url(), self.slug
         )
-    application_form_link.allow_tags = True
 
 
 class MembershipAppField(OrderingBaseModel):
@@ -2531,7 +2524,7 @@ class MembershipAppField(OrderingBaseModel):
                     ("CountrySelectField", _("Countries Drop Down")),
                     ("EmailField", _("Email")),
                     ("FileField", _("File upload")),
-                    ("DateField/django.forms.extras.SelectDateWidget", _("Date")),
+                    ("DateField/django.forms.widgets.SelectDateWidget", _("Date")),
                     ("DateTimeField", _("Date/time")),
                 )
     FIELD_TYPE_CHOICES2 = (
@@ -2539,10 +2532,9 @@ class MembershipAppField(OrderingBaseModel):
                 )
     FIELD_TYPE_CHOICES = FIELD_TYPE_CHOICES1 + FIELD_TYPE_CHOICES2
 
-    membership_app = models.ForeignKey("MembershipApp", related_name="fields")
+    membership_app = models.ForeignKey("MembershipApp", related_name="fields", on_delete=models.CASCADE)
     label = models.CharField(_("Label"), max_length=LABEL_MAX_LENGTH)
-    content_type = models.ForeignKey(ContentType,
-                                     null=True)
+    content_type = models.ForeignKey(ContentType, null=True, on_delete=models.CASCADE)
     field_name = models.CharField(max_length=100, blank=True, default='')
     required = models.BooleanField(_("Required"), default=False, blank=True)
     display = models.BooleanField(_("Show"), default=True, blank=True)
@@ -2575,7 +2567,7 @@ class MembershipAppField(OrderingBaseModel):
         ordering = ('position',)
         app_label = 'memberships'
 
-    def __unicode__(self):
+    def __str__(self):
         if self.field_name:
             return '%s (field name: %s)' % (self.label, self.field_name)
         return '%s' % self.label
@@ -2608,7 +2600,7 @@ class MembershipAppField(OrderingBaseModel):
             field_args = {"label": self.label,
                           "required": self.required,
                           'help_text': self.help_text}
-            arg_names = field_class.__init__.im_func.func_code.co_varnames
+            arg_names = field_class.__init__.__code__.co_varnames
             if initial:
                 field_args['initial'] = initial
             else:
@@ -2619,7 +2611,7 @@ class MembershipAppField(OrderingBaseModel):
             if "choices" in arg_names:
                 if self.field_name not in ['membership_type', 'payment_method']:
                     choices = [s.strip() for s in self.choices.split(",")]
-                    field_args["choices"] = zip(choices, choices)
+                    field_args["choices"] = list(zip(choices, choices))
             if field_widget is not None:
                 module, widget = field_widget.rsplit(".", 1)
                 field_args["widget"] = getattr(import_module(module), widget)
@@ -2670,7 +2662,7 @@ class MembershipAppField(OrderingBaseModel):
 
 
 class MembershipDemographic(models.Model):
-    user = models.OneToOneField(User, related_name="demographics", verbose_name=_('user'))
+    user = models.OneToOneField(User, related_name="demographics", verbose_name=_('user'), on_delete=models.CASCADE)
 
     ud1 = models.TextField(blank=True, default=u'', null=True)
     ud2 = models.TextField(blank=True, default=u'', null=True)
@@ -2706,12 +2698,12 @@ class MembershipDemographic(models.Model):
     class Meta:
         app_label = 'memberships'
 
+
 class MembershipFile(File):
     """
     This model will be used as handlers of File upload assigned
     to User Defined fields for the under Membership demographics
     """
-    pass
-
     class Meta:
         app_label = 'memberships'
+        manager_inheritance_from_future = True

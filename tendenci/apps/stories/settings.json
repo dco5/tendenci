@@ -1,13 +1,13 @@
 [
     {
-        "default_value": "true",
+        "default_value": true,
         "description": "Module is enabled or not.",
         "data_type": "boolean",
         "update_dt": "2010-08-12 17:19:11",
         "input_type": "select",
         "client_editable": false,
         "name": "enabled",
-        "value": "true",
+        "value": true,
         "label": "Enabled",
         "input_value": "true,false",
         "parent_id": 0,
@@ -31,6 +31,23 @@
         "scope": "module",
         "scope_category": "stories",
         "store": true,
+        "updated_by": ""
+    },
+    {
+        "default_value": "Stories",
+        "description": "The plural name of the module.",
+        "data_type": "string",
+        "update_dt": "2018-07-20 11:50:12",
+        "input_type": "text",
+        "client_editable": true,
+        "name": "label_plural",
+        "value": "Stories",
+        "label": "Label (Plural)",
+        "input_value": " ",
+        "parent_id": 0,
+        "scope": "module",
+        "scope_category": "stories",
+        "store": false,
         "updated_by": ""
     },
     {

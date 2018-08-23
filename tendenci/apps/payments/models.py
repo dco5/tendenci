@@ -1,5 +1,6 @@
 import uuid
 from django.db import models
+from django.urls import reverse
 from django.contrib.auth.models import User
 from django.utils.translation import ugettext_lazy as _
 from tendenci.apps.invoices.models import Invoice
@@ -8,7 +9,7 @@ from tendenci.apps.site_settings.utils import get_setting
 
 class Payment(models.Model):
     guid = models.CharField(max_length=50)
-    invoice = models.ForeignKey(Invoice)
+    invoice = models.ForeignKey(Invoice, on_delete=models.CASCADE)
     payment_attempted = models.BooleanField(default=True)
     response_code = models.CharField(max_length=2, default='')
     response_subcode = models.CharField(max_length=10, default='')
@@ -89,7 +90,7 @@ class Payment(models.Model):
 
     def save(self, user=None):
         if not self.id:
-            self.guid = str(uuid.uuid1())
+            self.guid = str(uuid.uuid4())
             if user and user.id:
                 self.creator = user
                 self.creator_username = user.username
@@ -113,15 +114,14 @@ class Payment(models.Model):
                     self.response_reason_code == '1',
                     self.status_detail == 'approved'])
 
-    def __unicode__(self):
-        return u"response_code: %s, trans_id: %s, amount: %.2f" % (
+    def __str__(self):
+        return "response_code: %s, trans_id: %s, amount: %.2f" % (
                                        self.response_code,
                                        self.trans_id,
                                        self.amount)
 
-    @models.permalink
     def get_absolute_url(self):
-        return ('payment.view', [self.id, self.guid])
+        return reverse('payment.view', args=[self.id, self.guid])
 
     def allow_view_by(self, user2_compare, guid=''):
         boo = False
@@ -140,7 +140,6 @@ class Payment(models.Model):
         return boo
 
     def payments_pop_by_invoice_user(self, user, inv, session_id='', **kwargs):
-        from django.core.urlresolvers import reverse
         boo = False
         if inv.allow_payment_by(user, session_id):
             boo = True
@@ -239,7 +238,7 @@ class PaymentMethod(models.Model):
     class Meta:
         app_label = 'payments'
 
-    def __unicode__(self):
+    def __str__(self):
         name = "%s" % (self.human_name, )
 
         if self.is_online:

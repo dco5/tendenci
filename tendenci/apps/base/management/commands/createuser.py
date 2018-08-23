@@ -2,11 +2,11 @@
 Management utility to create superusers.
 """
 from __future__ import print_function
+from builtins import input
 
 import getpass
 import re
 import sys
-from optparse import make_option
 
 from django.contrib.auth.models import User
 from django.contrib.auth.management import get_default_username
@@ -15,7 +15,7 @@ from django.core.management.base import BaseCommand, CommandError
 from django.db import DEFAULT_DB_ALIAS
 from django.utils.translation import ugettext as _
 
-RE_VALID_USERNAME = re.compile('[\w.@+-]+$')
+RE_VALID_USERNAME = re.compile(r'[\w.@+-]+$')
 
 EMAIL_RE = re.compile(
     r"(^[-!#$%&'*+/=?^_`{}|~0-9A-Z]+(\.[-!#$%&'*+/=?^_`{}|~0-9A-Z]+)*"  # dot-atom
@@ -88,7 +88,7 @@ class Command(BaseCommand):
                         input_msg = 'Username'
                         if default_username:
                             input_msg += ' (leave blank to use %r)' % default_username
-                        username = raw_input(input_msg + ': ')
+                        username = input(input_msg + ': ')
                     if default_username and username == '':
                         username = default_username
                     if not RE_VALID_USERNAME.match(username):
@@ -106,7 +106,7 @@ class Command(BaseCommand):
                 # Get an email
                 while 1:
                     if not email:
-                        email = raw_input('E-mail address: ')
+                        email = input('E-mail address: ')
                     try:
                         is_valid_email(email)
                     except exceptions.ValidationError:

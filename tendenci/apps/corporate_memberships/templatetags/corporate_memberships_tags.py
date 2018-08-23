@@ -1,12 +1,12 @@
 import random
 
 from django.contrib.auth.models import AnonymousUser, User
-from django.db import models
 from django.template import Node, Library, TemplateSyntaxError, Variable
 from django.utils.translation import ugettext_lazy as _
+from django.db.models.functions import Lower
 
 from tendenci.apps.corporate_memberships.models import CorpMembership
-from tendenci.apps.base.template_tags import ListNode, parse_tag_kwargs
+from tendenci.apps.base.template_tags import parse_tag_kwargs
 from tendenci.apps.site_settings.utils import get_setting
 from tendenci.apps.base.utils import tcurrency
 
@@ -36,7 +36,7 @@ def render_corpmembership_field(request, field_obj,
             'field': field, 'field_pwd': None}
 
 
-@register.assignment_tag
+@register.simple_tag
 def individual_pricing_desp(corp_membership):
     """
     Return the description of pricing for the individual memberships
@@ -184,7 +184,7 @@ class ListCorpMembershipNode(Node):
     def __init__(self, context_var, *args, **kwargs):
         self.context_var = context_var
         self.kwargs = kwargs
-        
+
     def custom_model_filter(self, items, user):
         """
         Filters out articles that aren't yet released.
@@ -251,31 +251,32 @@ class ListCorpMembershipNode(Node):
                 order = self.kwargs['order']
 
         items = CorpMembership.objects.all()
-        if user.is_authenticated():
-            if not user.profile.is_superuser:
-                if user.profile.is_member and allow_member_search:
-                    items = items.distinct()
-                else:
-                    items = items.none()
-        else:
-            if not allow_anonymous_search:
+        if not allow_anonymous_search:
+            if user.is_authenticated:
+                if not user.profile.is_superuser:
+                    if user.profile.is_member and allow_member_search:
+                        items = items.distinct()
+                    else:
+                        items = items.none()
+            else:
                 items = items.none()
-                
+
         items = self.custom_model_filter(items, user)
 
         objects = []
 
         # if order is not specified it sorts by relevance
         if order:
-            items = items.order_by(order)
+            if order == 'corp_profile__name':
+                items = items.order_by(Lower(order))
+            else:
+                items = items.order_by(order)
 
         if randomize:
-            objects = [item for item in random.sample(items, items.count())]
+            items = list(items)
+            objects = random.sample(items, min(len(items), limit))
         else:
-            objects = items
-            
-        if limit:
-            objects = objects[:limit]
+            objects = items[:limit]
 
         context[self.context_var] = objects
         return ""

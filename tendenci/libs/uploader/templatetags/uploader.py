@@ -1,5 +1,4 @@
-from django.template import Library, Node, Context
-from django.template.loader import get_template
+from django.template import Library, Node
 
 # Create Django template tags for the uploader, to make it easy to add an uploader to a page.
 
@@ -21,13 +20,13 @@ class UploaderNode(Node):
     def __init__(self, nodelist):
         self.nodelist = nodelist
     def render(self, context):
-        template = get_template('uploader/body.html')
+        template = context.template.engine.get_template('uploader/body.html')
         uploader_options = self.nodelist.render(context)
-        c = Context({'uploader_options':uploader_options})
-        return template.render(c)
+        context['uploader_options'] = uploader_options
+        return template.render(context=context)
 
 @register.tag
 def uploader(parser, token):
-    nodelist = parser.parse('end_uploader',)
+    nodelist = parser.parse(('end_uploader',))
     parser.delete_first_token()
     return UploaderNode(nodelist)

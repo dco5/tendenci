@@ -1,13 +1,13 @@
 import os
 import uuid
 import hashlib
-import urllib
+from six.moves.urllib.parse import urlencode
 
 from django.db import models
+from django.urls import reverse
 from django.contrib.auth.models import User
 from django.utils.translation import ugettext_lazy as _
 from django.core.files.storage import default_storage
-from django.utils.encoding import smart_str
 from django.conf import settings
 from django.db import connection, ProgrammingError
 
@@ -18,6 +18,7 @@ from tendenci.apps.base.models import BaseImport, BaseImportData
 from tendenci.apps.base.utils import UnicodeWriter
 from tendenci.libs.abstracts.models import Person
 from tendenci.apps.site_settings.utils import get_setting
+from tendenci.apps.theme.templatetags.static import static
 #from tendenci.apps.user_groups.models import Group
 
 
@@ -44,7 +45,7 @@ class Profile(Person):
 
     # relations
     guid = models.CharField(max_length=40)
-    entity = models.ForeignKey(Entity, blank=True, null=True)
+    entity = models.ForeignKey(Entity, blank=True, null=True, on_delete=models.SET_NULL)
     pl_id = models.IntegerField(default=1)
     historical_member_number = models.CharField(_('historical member number'), max_length=50, blank=True)
 
@@ -70,7 +71,7 @@ class Profile(Person):
     ssn = models.CharField(_('social security number'), max_length=50, blank=True)
     spouse = models.CharField(_('spouse'), max_length=50, blank=True)
     department = models.CharField(_('department'), max_length=50, blank=True)
-    education = models.CharField(_('education'), max_length=100, blank=True)
+    education = models.CharField(_('highest level of education'), max_length=100, blank=True)
     student = models.IntegerField(_('student'), null=True, blank=True)
     remember_login = models.BooleanField(_('remember login'), default=False)
     exported = models.BooleanField(_('exported'), default=False)
@@ -101,20 +102,19 @@ class Profile(Person):
         verbose_name_plural = _("Users")
         app_label = 'profiles'
 
-    def __unicode__(self):
+    def __str__(self):
         if hasattr(self, 'user'):
             return self.user.username
         else:
             return u''
 
-    @models.permalink
     def get_absolute_url(self):
         from tendenci.apps.profiles.utils import clean_username
         cleaned_username = clean_username(self.user.username)
         if cleaned_username != self.user.username:
             self.user.username = cleaned_username
             self.user.save()
-        return ('profile', [self.user.username])
+        return reverse('profile', args=[self.user.username])
 
     def _can_login(self):
         """
@@ -178,7 +178,7 @@ class Profile(Person):
 
     def save(self, *args, **kwargs):
         if not self.id:
-            self.guid = str(uuid.uuid1())
+            self.guid = str(uuid.uuid4())
 
         # match allow_anonymous_view with opposite of hide_in_search
         if self.hide_in_search:
@@ -215,12 +215,12 @@ class Profile(Person):
 
         # allow user search users
         if get_setting('module', 'users', 'allowusersearch') \
-            and self.user.is_authenticated():
+            and self.user.is_authenticated:
             return True
 
         # allow members search users/members
         if get_setting('module', 'memberships', 'memberprotection') != 'private':
-            if self.user.is_authenticated() and self.user.profile.is_member:
+            if self.user.is_authenticated and self.user.profile.is_member:
                 return True
 
         return False
@@ -355,9 +355,10 @@ class Profile(Person):
 
         max_length = 8
         # the first argument is the class, exclude it
-        un = ' '.join(args[1:])             # concat args into one string
-        un = re.sub('\s+', '_', un)       # replace spaces w/ underscores
-        un = re.sub('[^\w.-]+', '', un)   # remove non-word-characters
+        un = ''.join(args[1:])             # concat args into one string
+        un =  un.lower()
+        un = re.sub(r'\s+', '', un)       # remove spaces
+        un = re.sub(r'[^\w.-]+', '', un)   # remove non-word-characters
         un = un.strip('_.- ')           # strip funny-characters from sides
         un = un[:max_length].lower()    # keep max length and lowercase username
 
@@ -372,7 +373,7 @@ class Profile(Person):
             # to kill the database username max field length
             un = '%s%s' % (un, str(max(others) + 1))
 
-        return un.lower()
+        return un
 
     @classmethod
     def get_or_create_user(cls, **kwargs):
@@ -415,7 +416,7 @@ class Profile(Person):
             user = User.objects.create_user(**{
                 'username': un or Profile.spawn_username(fn[:1], ln),
                 'email': em,
-                'password': pw or uuid.uuid1().get_hex()[:6],
+                'password': pw or uuid.uuid4().hex[:6],
             })
 
         user.first_name = fn
@@ -425,7 +426,7 @@ class Profile(Person):
 
         if created:
             profile = Profile.objects.create_profile(user)
-            sf_id = create_salesforce_contact(profile)
+            create_salesforce_contact(profile)  # Returns sf_id
 
         return user, created
 
@@ -457,7 +458,7 @@ class Profile(Person):
 
     def getMD5(self):
         m = hashlib.md5()
-        m.update(self.user.email)
+        m.update(self.user.email.encode())
         return m.hexdigest()
 
     def get_gravatar_url(self, size):
@@ -478,18 +479,17 @@ class Profile(Person):
             c.close()
 
         if not default:
-            default = '%s%s%s' %  (get_setting('site', 'global', 'siteurl'),
-                                   getattr(settings, 'STATIC_URL', ''),
-                                   settings.GAVATAR_DEFAULT_URL)
+            default = '%s%s'%(get_setting('site', 'global', 'siteurl'),
+                                static(settings.GAVATAR_DEFAULT_URL))
 
         gravatar_url = "//www.gravatar.com/avatar/" + self.getMD5() + "?"
-        gravatar_url += urllib.urlencode({'d':default, 's':str(size)})
+        gravatar_url += urlencode({'d':default, 's':str(size)})
         return gravatar_url
 
 
 def get_import_file_path(instance, filename):
     return "imports/profiles/{uuid}/{filename}".format(
-                            uuid=uuid.uuid1().get_hex()[:8],
+                            uuid=uuid.uuid4().hex[:8],
                             filename=filename)
 
 
@@ -499,7 +499,7 @@ class UserImport(BaseImport):
         (False, _('Not Interactive (no login)')),
     )
 
-#     UPLOAD_DIR = "imports/profiles/%s" % uuid.uuid1().get_hex()[:8]
+#     UPLOAD_DIR = "imports/profiles/%s" % uuid.uuid4().hex[:8]
 
     upload_file = models.FileField(_("Upload File"), max_length=260,
                                    upload_to=get_import_file_path,
@@ -535,7 +535,6 @@ class UserImport(BaseImport):
                 data_dict = idata.row_data
                 row = [data_dict[k] for k in header_row if k in data_dict]
                 row.extend([idata.action_taken, idata.error])
-                row = [smart_str(s).decode('utf-8') for s in row]
                 recap_writer.writerow(row)
 
             f.close()
@@ -544,7 +543,7 @@ class UserImport(BaseImport):
 
 
 class UserImportData(BaseImportData):
-    uimport = models.ForeignKey(UserImport, related_name="user_import_data")
+    uimport = models.ForeignKey(UserImport, related_name="user_import_data", on_delete=models.CASCADE)
 
     class Meta:
         app_label = 'profiles'

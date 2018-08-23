@@ -4,6 +4,7 @@ import operator
 from uuid import uuid4
 from os.path import join
 from datetime import datetime
+from functools import reduce
 from django import forms
 from django.utils.translation import ugettext_lazy as _
 from django.core.files.storage import FileSystemStorage
@@ -127,6 +128,7 @@ class CorpMembershipAppForm(TendenciBaseForm):
                   'description',
                   'confirmation_text',
                   'notes',
+                  'parent_entities',
                   'allow_anonymous_view',
                   'user_perms',
                   'member_perms',
@@ -232,12 +234,11 @@ def get_field_size(app_field_obj):
 
 
 def assign_fields(form, app_field_objs, instance=None):
-    form_field_keys = form.fields.keys()
     # a list of names of app fields
     field_names = [field.field_name for field in app_field_objs
                    if field.field_name != '' and
-                   field.field_name in form_field_keys]
-    for name in form_field_keys:
+                   field.field_name in form.fields]
+    for name in list(form.fields):
         if name not in field_names:
             del form.fields[name]
     # update the field attrs - label, required...
@@ -256,7 +257,11 @@ def assign_fields(form, app_field_objs, instance=None):
             if obj.field_name == 'payment_method':
                 if 'payment_method' in form.fields:
                     del form.fields['payment_method']
-                obj.display_content = instance.payment_method
+                if instance.payment_method:
+                    obj.display_content = instance.payment_method
+                else:
+                    obj.display_only = False
+                
                 if instance.invoice:
                     obj.display_content = """%s - <a href="%s">View Invoice</a>
                                         """ % (obj.display_content,
@@ -269,6 +274,7 @@ def assign_fields(form, app_field_objs, instance=None):
                                     'corporate_membership_type',
                                     'status',
                                     'status_detail',
+                                    'parent_entity',
                                     'industry',
                                     'region']:
                 # create form field with customized behavior
@@ -306,11 +312,113 @@ def assign_fields(form, app_field_objs, instance=None):
             obj.label_type = ' '.join(label_type)
 
 
-class CorpProfileForm(FormControlWidgetMixin, forms.ModelForm):
+class CorpProfileBaseForm(FormControlWidgetMixin, forms.ModelForm):
     logo_file = forms.FileField(
       required=False,
       help_text=_('Company logo. Only jpg, gif, or png images.'))
 
+    def clean_logo_file(self):
+        ALLOWED_LOGO_EXT = (
+            '.jpg',
+            '.jpeg',
+            '.gif',
+            '.png'
+        )
+
+        logo_file = self.cleaned_data['logo_file']
+        if logo_file:
+            try:
+                extension = splitext(logo_file.name)[1]
+
+                # check the extension
+                if extension.lower() not in ALLOWED_LOGO_EXT:
+                    raise forms.ValidationError(_('The logo must be of jpg, gif, or png image type.'))
+
+                # check the image header
+                image_type = '.%s' % imghdr.what('', logo_file.read())
+                if image_type not in ALLOWED_LOGO_EXT:
+                    raise forms.ValidationError(_('The logo is an invalid image. Try uploading another logo.'))
+
+                max_upload_size = get_max_file_upload_size()
+                if logo_file.size > max_upload_size:
+                    raise forms.ValidationError(_('Please keep filesize under %(max_upload_size)s. Current filesize %(logo_size)s') % {
+                                                    'max_upload_size': filesizeformat(max_upload_size),
+                                                    'logo_size': filesizeformat(logo_file.size)})
+            except IOError:
+                logo_file = None
+
+        return logo_file
+
+
+class CorpProfileAdminForm(CorpProfileBaseForm):
+    class Meta:
+        model = CorpProfile
+        fields = ('logo_file',
+                'name',
+                'url',
+                'number_employees',
+                 'phone',
+                 'email',
+                 'parent_entity',
+                 'address',
+                 'address2',
+                 'city',
+                 'state',
+                 'zip',
+                 'country',
+                 'description',
+                 'notes',)
+
+    def __init__(self, *args, **kwargs):
+        super(CorpProfileAdminForm, self).__init__(*args, **kwargs)
+
+        if self.instance.logo:
+            self.initial['logo_file'] = self.instance.logo.file
+
+        # assign the selected parent_entities to the drop down
+        f = self.fields.get('parent_entity', None)
+        if f is not None:
+            corpmembership_app = CorpMembershipApp.objects.current_app()
+            selected_parent_entities = corpmembership_app.parent_entities.all()
+            if selected_parent_entities.exists():
+                f.queryset = corpmembership_app.parent_entities.all()
+
+    def clean_number_employees(self):
+        number_employees = self.cleaned_data['number_employees']
+        if not number_employees:
+            number_employees = 0
+
+        return number_employees
+
+    def save(self, *args, **kwargs):
+        super(CorpProfileAdminForm, self).save(*args, **kwargs)
+        from tendenci.apps.files.models import File
+        content_type = ContentType.objects.get(
+            app_label=self.instance._meta.app_label,
+            model=self.instance._meta.model_name)
+        logo_file = self.cleaned_data.get('logo_file', None)
+        if logo_file:
+            file_object, created = File.objects.get_or_create(
+                file=logo_file,
+                defaults={
+                    'name': logo_file.name,
+                    'content_type': content_type,
+                    'object_id': self.instance.pk,
+                    'is_public': True,
+                })
+            self.instance.logo = file_object
+            self.instance.save(log=False)
+        else:
+            self.instance.logo = None
+            self.instance.save(log=False)
+            File.objects.filter(
+                        content_type=content_type,
+                        object_id=self.instance.pk).delete()
+
+        return self.instance
+
+
+class CorpProfileForm(CorpProfileBaseForm):
     class Meta:
         model = CorpProfile
         fields = "__all__"
@@ -352,7 +460,14 @@ class CorpProfileForm(FormControlWidgetMixin, forms.ModelForm):
         if 'status_detail' in self.fields:
             del self.fields['status_detail']
 
-        self.field_names = [name for name in self.fields.keys()]
+        # assign the selected parent_entities to the drop down
+        f = self.fields.get('parent_entity', None)
+        if f is not None:
+            selected_parent_entities = self.corpmembership_app.parent_entities.all()
+            if selected_parent_entities.exists():
+                f.queryset = self.corpmembership_app.parent_entities.all()
+
+        self.field_names = [name for name in self.fields]
 
     def clean_secret_code(self):
         secret_code = self.cleaned_data['secret_code']
@@ -375,50 +490,18 @@ class CorpProfileForm(FormControlWidgetMixin, forms.ModelForm):
 
         return number_employees
 
-    def clean_logo_file(self):
-        ALLOWED_LOGO_EXT = (
-            '.jpg',
-            '.jpeg',
-            '.gif',
-            '.png'
-        )
-
-        logo_file = self.cleaned_data['logo_file']
-        if logo_file:
-            try:
-                extension = splitext(logo_file.name)[1]
-
-                # check the extension
-                if extension.lower() not in ALLOWED_LOGO_EXT:
-                    raise forms.ValidationError(_('The logo must be of jpg, gif, or png image type.'))
-
-                # check the image header
-                image_type = '.%s' % imghdr.what('', logo_file.read())
-                if image_type not in ALLOWED_LOGO_EXT:
-                    raise forms.ValidationError(_('The logo is an invalid image. Try uploading another logo.'))
-
-                max_upload_size = get_max_file_upload_size()
-                if logo_file.size > max_upload_size:
-                    raise forms.ValidationError(_('Please keep filesize under %(max_upload_size)s. Current filesize %(logo_size)s') % {
-                                                    'max_upload_size': filesizeformat(max_upload_size),
-                                                    'logo_size': filesizeformat(logo_file.size)})
-            except IOError:
-                logo_file = None
-
-        return logo_file
-
     def save(self, *args, **kwargs):
         from tendenci.apps.files.models import File
         if not self.instance.id:
-            if not self.request_user.is_anonymous():
+            if not self.request_user.is_anonymous:
                 self.instance.creator = self.request_user
                 self.instance.creator_username = self.request_user.username
             self.instance.status = True
             self.instance.status_detail = 'active'
-        if not self.request_user.is_anonymous():
+        if not self.request_user.is_anonymous:
             self.instance.owner = self.request_user
             self.instance.owner_username = self.request_user.username
-        for field_key in self.fields.keys():
+        for field_key in self.fields:
             if self.fields[field_key].widget.needs_multipart_form:
                 value = self.cleaned_data[field_key]
                 if value and hasattr(value, 'name'):
@@ -520,17 +603,16 @@ class CorpMembershipForm(FormControlWidgetMixin, forms.ModelForm):
                         choices=get_payment_method_choices(
                                     self.request_user,
                                     self.corpmembership_app))
-        self_fields_keys = self.fields.keys()
-        if 'status_detail' in self_fields_keys:
+        if 'status_detail' in self.fields:
             self.fields['status_detail'].widget = forms.widgets.Select(
                         choices=self.STATUS_DETAIL_CHOICES)
-        if 'status' in self_fields_keys:
+        if 'status' in self.fields:
             self.fields['status'].widget = forms.widgets.Select(
                         choices=self.STATUS_CHOICES)
 
         assign_fields(self, app_field_objs, instance=self.instance)
         self.add_form_control_class()
-        self.field_names = [name for name in self.fields.keys()]
+        self.field_names = [name for name in self.fields]
 
     def save(self, **kwargs):
         super(CorpMembershipForm, self).save(commit=False)
@@ -549,10 +631,10 @@ class CorpMembershipForm(FormControlWidgetMixin, forms.ModelForm):
                 self.instance.status_detail = 'pending'
             if not self.instance.join_dt:
                 self.instance.join_dt = datetime.now()
-            if not creator_owner.is_anonymous():
+            if not creator_owner.is_anonymous:
                 self.instance.creator = creator_owner
                 self.instance.creator_username = creator_owner.username
-        if not creator_owner.is_anonymous():
+        if not creator_owner.is_anonymous:
             self.instance.owner = creator_owner
             self.instance.owner_username = creator_owner.username
         if corp_profile:
@@ -676,9 +758,13 @@ class CorpMembershipSearchForm(FormControlWidgetMixin, forms.Form):
         choices=SEARCH_METHOD_CHOICES,
         required=False
     )
+    active_only = forms.BooleanField(label=_('Show Active Only'),
+                                     widget=forms.CheckboxInput(),
+                                     initial=True, required=False)
 
     def __init__(self, *args, **kwargs):
         search_field_names_list = kwargs.pop('names_list')
+        user = kwargs.pop('user')
         super(CorpMembershipSearchForm, self).__init__(*args, **kwargs)
         # add industry field if industry exists
         app = CorpMembershipApp.objects.current_app()
@@ -714,7 +800,65 @@ class CorpMembershipSearchForm(FormControlWidgetMixin, forms.Form):
             if len(label) > 30:
                 label = '%s...' % label[:30]
             search_choices.append((field.field_name, label))
+        if user and user.is_superuser:
+            search_choices.append(('status_detail', 'Status Detail'))
         self.fields['search_criteria'].choices = search_choices
+
+
+class ReportByTypeForm(FormControlWidgetMixin, forms.Form):
+    DAYS_CHOICES = (
+                 ('0', 'ALL'),
+                 ('30', _('Last 30 days')),
+                 ('60', _('Last 60 days')),
+                 ('90', _('Last 90 days')),
+                 ('180', _('Last 180 days')),
+                 ('365', _('Last 365 days')),
+                 ('1826', _('Last 5 years')),
+                 )
+    days = forms.ChoiceField(label=_('Join Date'),
+                             required=False,
+                            choices=DAYS_CHOICES,)
+    corp_membership_type = forms.ChoiceField(label=_('Type'),
+                            required=False,
+                            choices= ())
+
+    def __init__(self, *args, **kwargs):
+        super(ReportByTypeForm, self).__init__(*args, **kwargs)
+
+        self.fields['days'].widget.attrs.update({'onchange': 'this.form.submit();'})
+        self.fields['corp_membership_type'].choices = [(0, 'ALL')] + \
+                                [(t.id, t.name) for t in CorporateMembershipType.objects.filter(
+                                status=True,
+                                status_detail='active'
+                                ).order_by('name')]
+        self.fields['corp_membership_type'].widget.attrs.update({'onchange': 'this.form.submit();'})
+        self.fields['corp_membership_type'].choices = ([(0, 'ALL')] +
+            [(t.id, t.name) for t in CorporateMembershipType.objects.filter(
+             status=True,
+             status_detail='active'
+             ).order_by('name')])
+
+
+class ReportByStatusForm(FormControlWidgetMixin, forms.Form):
+    STATUS_CHOICES = (
+                 ('', 'ALL'),
+                 ('active', _('Active')),
+                 ('pending', _('Pending')),
+                 ('paid - pending approval', _('Paid - Pending Approval')),
+                 ('expired', _('Expired')),
+                 )
+    days = forms.ChoiceField(label=_('Join Date'),
+                             required=False,
+                            choices=ReportByTypeForm.DAYS_CHOICES,)
+    status_detail = forms.ChoiceField(label=_('Status'),
+                            required=False,
+                            choices=STATUS_CHOICES)
+
+    def __init__(self, *args, **kwargs):
+        super(ReportByStatusForm, self).__init__(*args, **kwargs)
+
+        self.fields['days'].widget.attrs.update({'onchange': 'this.form.submit();'})
+        self.fields['status_detail'].widget.attrs.update({'onchange': 'this.form.submit();'})
 
 
 class CorpMembershipUploadForm(forms.ModelForm):
@@ -736,7 +880,7 @@ class CorpMembershipUploadForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super(CorpMembershipUploadForm, self).__init__(*args, **kwargs)
         self.fields['key'].initial = 'name'
-        for k in self.fields.keys():
+        for k in self.fields:
             if k in ['key', 'override']:
                 self.fields[k].widget.attrs['class'] = 'form-control'
 
@@ -776,7 +920,7 @@ class CreatorForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super(CreatorForm, self).__init__(*args, **kwargs)
         self.fields['captcha'] = CustomCatpchaField(label=_('Type the code below'))
-        for k in self.fields.keys():
+        for k in self.fields:
             self.fields[k].widget.attrs['class'] = 'form-control'
 
 
@@ -826,7 +970,7 @@ class CorpApproveForm(forms.Form):
                        u.email == email:
                         exact_match = u.id
 
-        return user_set.items(), exact_match
+        return list(user_set.items()), exact_match
 
     def __init__(self, *args, **kwargs):
         corp_memb = kwargs.pop('corporate_membership')
@@ -873,7 +1017,7 @@ class CorpMembershipRepForm(forms.ModelForm):
     def clean_user(self):
         value = self.cleaned_data['user']
         try:
-            rep = CorpMembershipRep.objects.get(
+            CorpMembershipRep.objects.get(
                 corp_profile=self.corp_membership.corp_profile,
                 user=value)
             raise forms.ValidationError(
@@ -910,7 +1054,7 @@ class CSVForm(forms.Form):
             Basic Form: Application & File Uploader
             """
             self.fields['corp_app'] = forms.ModelChoiceField(
-                label=_('Corp Application'), queryset=CorpApp.objects.all())
+                label=_('Corp Application'), queryset=CorpMembershipApp.objects.all())
 
             self.fields['update_option'] = forms.CharField(
                     widget=forms.RadioSelect(
@@ -932,16 +1076,16 @@ class CSVForm(forms.Form):
             csv = csv_to_dict(file_path)
 
             # choices list
-            choices = csv[0].keys()
+            choices = csv[0]
 
             # make tuples; sort tuples (case-insensitive)
-            choice_tuples = [(c, c) for c in csv[0].keys()]
+            choice_tuples = [(c, c) for c in csv[0]]
 
             # insert blank option
             choice_tuples.insert(0, ('', ''))
             choice_tuples = sorted(choice_tuples, key=lambda c: c[0].lower())
 
-            app_fields = CorpField.objects.filter(corp_app=corp_app)
+            app_fields = CorpMembershipAppField.objects.filter(corp_app=corp_app)
             required_fields = ['name', 'corporate_membership_type']
             for field in app_fields:
                 if field.field_type not in ['section_break', 'page_break']:
@@ -973,7 +1117,7 @@ class CSVForm(forms.Form):
             # corp_memb_field_names = [smart_str(field.name)
             # for field in CorporateMembership._meta.fields]
             for key, label in extra_fields:
-                if key not in self.fields.keys():
+                if key not in self.fields:
                     self.fields[key] = ChoiceField(**{
                                             'label': label,
                                             'choices': choice_tuples,

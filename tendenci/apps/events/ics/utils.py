@@ -1,3 +1,4 @@
+from builtins import str
 import re
 import subprocess
 import os
@@ -24,7 +25,7 @@ def create_ics(user):
 
         #Create ics file for user
         ics_str = "BEGIN:VCALENDAR\n"
-        ics_str += "PRODID:-//Schipul Technologies//Schipul Codebase 5.0 MIMEDIR//EN\n"
+        ics_str += "PRODID:-//Tendenci/Tendenci Codebase 11.0 MIMEDIR//EN\n"
         ics_str += "VERSION:2.0\n"
         ics_str += "METHOD:PUBLISH\n"
 
@@ -33,11 +34,10 @@ def create_ics(user):
 
         ics_str += "END:VCALENDAR\n"
 
-        ics_str = ics_str.encode('UTF-8')
         file_name = 'ics-%s.ics' % (user.pk)
         file_path = os.path.join(absolute_directory, file_name)
-        destination = open(file_path, 'w+')
-        destination.write(ics_str)
+        destination = open(file_path, 'wb+')
+        destination.write(ics_str.encode())
         destination.close()
 
         return ics_str
@@ -51,5 +51,5 @@ def run_precreate_ics(app_label, model_name, user):
         model_name=model_name,
         user=user
     )
-    subprocess.Popen([python_executable(), 'manage.py', 'run_precreate_ics', unicode(ics.pk)])
+    subprocess.Popen([python_executable(), 'manage.py', 'run_precreate_ics', str(ics.pk)])
     return ics.pk

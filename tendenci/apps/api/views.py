@@ -17,7 +17,7 @@ def api_rp(request):
 
     Test command:
     curl --dump-header - -H "Content-Type: application/json" -X POST
-    --data '{"api_method": "api_add_rp", "email": "jqian@schipul.com",
+    --data '{"api_method": "api_add_rp", "email": "jqian@tendenci.com",
     "description": "self signup", "payment_amount": "20",
     "access_id":"jennytest", "time_stamp":"1317505435.040309",
     "h_sequence":"3b0b9655af8698d3d1b87ea913da3a41"}'
@@ -31,7 +31,7 @@ def api_rp(request):
     """
     result_code_success = {'result_code': '1001'}
     result_code_invalid = {'result_code': 'E004'}
-    result_code_error = {'result_code': 'E005'}
+    #result_code_error = {'result_code': 'E005'}  # Not currently used
 
     try:
         data = simplejson.loads(request.raw_post_data)

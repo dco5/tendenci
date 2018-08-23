@@ -15,7 +15,7 @@ class Command(BaseCommand):
     """
 
     def handle(self, *args, **options):
-        import cStringIO
+        from io import BytesIO
         import mimetypes
         import boto
         from boto.s3.key import Key
@@ -29,7 +29,7 @@ class Command(BaseCommand):
             k = Key(bucket)
 
             static_root = settings.STATIC_ROOT
-            static_url_to_find = '/static/'
+            static_url_to_find = settings.LOCAL_STATIC_URL
             static_url_replace_with = settings.STATIC_URL
 
             if os.path.isdir(static_root):
@@ -56,7 +56,7 @@ class Command(BaseCommand):
 
                                         content_type = mimetypes.guess_type(filename)[0] or k.DefaultContentType
                                         k.set_metadata('Content-Type', content_type)
-                                        myfile = cStringIO.StringIO(new_content)
+                                        myfile = BytesIO(new_content)
                                         k.set_contents_from_file(myfile, replace=True)
                                         myfile.close()
                                         #k.set_contents_from_string(new_content, replace=True)

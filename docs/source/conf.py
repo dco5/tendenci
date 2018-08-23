@@ -17,17 +17,17 @@ import os
 # from sphinx.util import compat
 # compat.make_admonition = BaseAdmonition
 
-
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
 
 sys.path.append(os.path.abspath("../../"))
 sys.path.insert(0, os.path.abspath('.'))
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 os.environ.setdefault("DJANGO_SETTINGS_MODULE", "tendenci.settings")
 
-
 from tendenci import __version__ as tendenci_version
+
 
 # -- General configuration -----------------------------------------------------
 
@@ -62,14 +62,14 @@ master_doc = 'index'
 
 # General information about the project.
 project = u'Tendenci'
-copyright = u'2017, Tendenci'
+copyright = u'2018, Tendenci'
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
 # built documents.
 #
 # The short X.Y version.
-version = '7.3'
+version = '11.0'
 # The full version, including alpha/beta/rc tags.
 release = tendenci_version
 
@@ -124,11 +124,11 @@ html_theme = 'default'
 
 # The name for this set of Sphinx documents.  If None, it defaults to
 # "<project> v<release> documentation".
-html_title = "<project> v<release> - The Open Source AMS Software for NGOs and Governments"
+html_title = "Tendenci 11 - The Open Source AMS Software for NGOs and Governments"
 
 # A shorter title for the navigation bar.  Default is the same as html_title.
 # html_short_title = None
-html_short_title= "<project> v<release>"
+html_short_title= "Tendenci 11"
 
 # The name of an image file (relative to this directory) to place at the top
 # of the sidebar.

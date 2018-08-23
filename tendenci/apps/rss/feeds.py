@@ -1,11 +1,6 @@
-from datetime import datetime
-import itertools
-import feedsmanager
-from haystack.query import SearchQuerySet
+from . import feedsmanager
 
 from django.contrib.syndication.views import Feed
-from django.contrib.syndication.views import FeedDoesNotExist
-from django.contrib.contenttypes.models import ContentType
 from django.utils.translation import ugettext_lazy as _
 from django.conf import settings
 from django.template.loader import render_to_string
@@ -28,10 +23,10 @@ class GlobalFeed(Feed):
     description = site_description
 
     def __init__(self):
-        Feed.__init__(self)
+        super(GlobalFeed, self).__init__()
+        self.__qualname__ = self.__class__.__name__  # https://code.djangoproject.com/ticket/29296
         self.all_items = []     # all items for this rss feed
         self.feed_for_item = {}   # item -> feed cache
-        self.load_feeds_items() # load items
 
     def load_feeds_items(self):
         """ Load all feeds items """
@@ -50,6 +45,12 @@ class GlobalFeed(Feed):
                     break
 
     def items(self):
+        if not self.all_items:
+            # This method is moved from '__init__' to here to avoid querying db thus
+            # avoid the error "column doesn't exist" on system checks when making new
+            # migrations with the 'makemigrations' command and also applying the migrations
+            # with  the 'migrate' commands.
+            self.load_feeds_items() # load items
         return self.all_items[:max_items]
 
     def item_title(self, item):
@@ -57,7 +58,7 @@ class GlobalFeed(Feed):
         if hasattr(feed, 'title_template') and feed.title_template is not None:
             # use the template instead of the method
             #print(feed.title_template)
-            return render_to_string(feed.title_template, { 'obj' : item })
+            return render_to_string(template_name=feed.title_template, context={ 'obj' : item })
         return self.get_attr_item('title', item)
 
     def item_description(self, item):
@@ -65,7 +66,7 @@ class GlobalFeed(Feed):
         if hasattr(feed, 'description_template') and feed.description_template is not None:
             # use the template instead
             #print(feed.description_template)
-            return render_to_string(feed.description_template, { 'obj' : item })
+            return render_to_string(template_name=feed.description_template, context={ 'obj' : item })
         return self.get_attr_item('description', item)
 
     def item_pubdate(self, item):

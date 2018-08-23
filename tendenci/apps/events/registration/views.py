@@ -1,10 +1,11 @@
 """ANONYMOUS EVENT REGISTRATION VIEWS"""
 
+from builtins import str
+
 from django.contrib import messages
 from django.contrib.auth.models import User, AnonymousUser
 from django.utils.translation import ugettext_lazy as _
 import simplejson as json
-from django.template import RequestContext
 from django.shortcuts import get_object_or_404, redirect
 from django.http import Http404, HttpResponse
 from django.forms.formsets import formset_factory
@@ -15,7 +16,7 @@ from django.forms.models import model_to_dict
 from tendenci.apps.site_settings.utils import get_setting
 from tendenci.apps.event_logs.models import EventLog
 from tendenci.apps.memberships.models import Membership
-from tendenci.apps.theme.shortcuts import themed_response as render_to_response
+from tendenci.apps.theme.shortcuts import themed_response as render_to_resp
 
 from tendenci.apps.events.models import Event, RegConfPricing, Registrant
 from tendenci.apps.events.utils import email_admins
@@ -62,7 +63,7 @@ def ajax_user(request, event_id):
 
     data = json.dumps(None)
     #check if already registered
-    if not (user.is_anonymous() or pricing.allow_anonymous):
+    if not (user.is_anonymous or pricing.allow_anonymous):
         used = Registrant.objects.filter(user=user)
         if used:
             if not (pricing.allow_anonymous or user.profile.is_superuser):
@@ -115,7 +116,7 @@ def ajax_pricing(request, event_id, template_name="events/registration/pricing.h
 
     # register user in user list
     user_pks = request.session.get('user_list', [])
-    if not user.is_anonymous():
+    if not user.is_anonymous:
         user_pks.append(user.pk)
     request.session['user_list'] = user_pks
 
@@ -159,9 +160,9 @@ def ajax_pricing(request, event_id, template_name="events/registration/pricing.h
             d['allow_anonymous'] = True
         a_list.append(d)
 
-    form = render_to_string('events/addons/addon-add-box.html',
-        {'addons':a_list, 'anon_pricing':True},
-        RequestContext(request))
+    form = render_to_string(template_name='events/addons/addon-add-box.html',
+        context={'addons':a_list, 'anon_pricing':True},
+        request=request)
 
     data = json.dumps({
         'pricings':pricing_list,
@@ -207,7 +208,6 @@ def multi_register(request, event_id, template_name="events/registration/multi_r
             messages.add_message(request, messages.ERROR, _('Registration is closed.'))
             return redirect('event', event.pk)
 
-    user = AnonymousUser()
     # get available pricings
     active_pricings = get_active_pricings(event)
     event_pricings = event.registration_configuration.regconfpricing_set.all()
@@ -295,7 +295,7 @@ def multi_register(request, event_id, template_name="events/registration/multi_r
                 for registrant in registrants:
                     #registrant.assign_mapped_fields()
                     if registrant.custom_reg_form_entry:
-                        registrant.name = registrant.custom_reg_form_entry.__unicode__()
+                        registrant.name = str(registrant.custom_reg_form_entry)
                     else:
                         registrant.name = ' '.join([registrant.first_name, registrant.last_name])
 
@@ -358,7 +358,7 @@ def multi_register(request, event_id, template_name="events/registration/multi_r
         formset = FormSet(**params)
         hidden_form = formset.forms[0]
 
-    return render_to_response(template_name, {
+    return render_to_resp(request=request, template_name=template_name, context={
             'event':event,
             'reg_form':reg_form,
             'custom_reg_form': custom_reg_form,
@@ -372,4 +372,4 @@ def multi_register(request, event_id, template_name="events/registration/multi_r
             'total_price':reg_formset.get_total_price()+addon_formset.get_total_price(),
             'allow_memberid_pricing':get_setting('module', 'events', 'memberidpricing'),
             'shared_pricing':get_setting('module', 'events', 'sharedpricing'),
-            }, context_instance=RequestContext(request))
+            })

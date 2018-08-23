@@ -7,7 +7,7 @@ from tendenci.apps.donations.managers import DonationManager
 
 class Donation(models.Model):
     guid = models.CharField(max_length=50)
-    user = models.ForeignKey(User, null=True)
+    user = models.ForeignKey(User, null=True, on_delete=models.SET_NULL)
     first_name = models.CharField(max_length=100)
     last_name = models.CharField(max_length=100)
     company = models.CharField(max_length=50, default='', blank=True, null=True)
@@ -24,11 +24,11 @@ class Donation(models.Model):
     donation_amount = models.DecimalField(max_digits=10, decimal_places=2)
     allocation = models.CharField(max_length=150, default='', blank=True,  null=True)
     payment_method = models.CharField(max_length=50, default='cc')
-    invoice = models.ForeignKey(Invoice, blank=True, null=True)
+    invoice = models.ForeignKey(Invoice, blank=True, null=True, on_delete=models.SET_NULL)
     create_dt = models.DateTimeField(auto_now_add=True)
-    creator = models.ForeignKey(User, null=True,  related_name="donation_creator")
+    creator = models.ForeignKey(User, null=True,  related_name="donation_creator", on_delete=models.SET_NULL)
     creator_username = models.CharField(max_length=50, null=True)
-    owner = models.ForeignKey(User, null=True, related_name="donation_owner")
+    owner = models.ForeignKey(User, null=True, related_name="donation_owner", on_delete=models.SET_NULL)
     owner_username = models.CharField(max_length=50, null=True)
     status_detail = models.CharField(max_length=50, default='estimate')
     status = models.NullBooleanField(default=True)
@@ -39,8 +39,14 @@ class Donation(models.Model):
         app_label = 'donations'
 
     def save(self, user=None, *args, **kwargs):
+        for field in self._meta.fields:
+            # avoid saving as null for the string-based fields
+            field_name = field.name
+            if getattr(self, field_name) is None and field.null and field.get_internal_type() in ['CharField', 'CharField']:
+                setattr(self,field_name, field.get_default())
+            
         if not self.id:
-            self.guid = str(uuid.uuid1())
+            self.guid = str(uuid.uuid4())
             if user and user.id:
                 self.creator=user
                 self.creator_username=user.username

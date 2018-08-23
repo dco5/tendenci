@@ -1,14 +1,10 @@
 from django.conf.urls import url
-from tendenci.apps.articles.feeds import LatestEntriesFeed
-from tendenci.apps.articles.signals import init_signals
 from tendenci.apps.site_settings.utils import get_setting
 from . import views
-
-
-init_signals()
-
+from .feeds import LatestEntriesFeed
 
 urlpath = get_setting('module', 'articles', 'url') or 'articles'
+
 urlpatterns = [
     url(r'^%s/$' % urlpath, views.search, name="articles"),
     url(r'^%s/search/$' % urlpath, views.search_redirect, name="article.search"),

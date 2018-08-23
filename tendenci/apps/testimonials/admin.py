@@ -1,13 +1,15 @@
 from django.contrib import admin
 from django.template.defaultfilters import truncatewords as truncate_words
 from django.utils.html import strip_tags
-from django.core.urlresolvers import reverse
+from django.utils.safestring import mark_safe
+from django.urls import reverse
 
 from tendenci.apps.event_logs.models import EventLog
 from tendenci.apps.perms.admin import TendenciBaseModelAdmin
 from tendenci.apps.testimonials.models import Testimonial
 from tendenci.apps.testimonials.forms import TestimonialForm
 from tendenci.apps.perms.utils import update_perms_and_save
+from tendenci.apps.theme.templatetags.static import static
 
 
 class TestimonialAdmin(TendenciBaseModelAdmin):
@@ -60,7 +62,7 @@ class TestimonialAdmin(TendenciBaseModelAdmin):
         js = (
             '//ajax.googleapis.com/ajax/libs/jquery/2.1.1/jquery.min.js',
             '//ajax.googleapis.com/ajax/libs/jqueryui/1.11.0/jquery-ui.min.js',
-            'js/admin/admin-list-reorder.js',
+            static('js/admin/admin-list-reorder.js'),
         )
 
     def save_model(self, request, object, form, change):
@@ -84,6 +86,7 @@ class TestimonialAdmin(TendenciBaseModelAdmin):
 
         return object
 
+    @mark_safe
     def image_preview(self, obj):
         if obj.image:
             args = [obj.image.pk]
@@ -92,7 +95,6 @@ class TestimonialAdmin(TendenciBaseModelAdmin):
             return '<img src="%s" />' % reverse('file', args=args)
         else:
             return "No image"
-    image_preview.allow_tags = True
     image_preview.short_description = 'Image'
 
 admin.site.register(Testimonial, TestimonialAdmin)

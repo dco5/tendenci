@@ -1,6 +1,8 @@
+from builtins import str
 from collections import OrderedDict
 
 from django.db import models
+from django.urls import reverse
 from django.utils.translation import ugettext_lazy as _
 from django.contrib.auth.models import User
 import simplejson as json
@@ -66,12 +68,11 @@ class Report(TendenciBaseModel):
         verbose_name = _('Report')
         verbose_name_plural = _('Reports')
 
-    def __unicode__(self):
-        return "%s %s " % (self.pk, unicode(self.type))
+    def __str__(self):
+        return "%s %s " % (self.pk, str(self.type))
 
-    @models.permalink
     def get_absolute_url(self):
-        return ('report_detail', [self.pk])
+        return reverse('report_detail', args=[self.pk])
 
     def runs(self):
         return Run.objects.filter(report=self).order_by('-create_dt')
@@ -96,7 +97,7 @@ class Report(TendenciBaseModel):
 
                 elif opt_key == "invoice_object_type":
                     value = ", ".join(sorted([get_ct_nice_name(i) for i in opt_val]))
-                    if sorted(opt_val) == sorted([unicode(i['object_type']) for i in Invoice.objects.values('object_type').distinct()]):
+                    if sorted(opt_val) == sorted([str(i['object_type']) for i in Invoice.objects.values('object_type').distinct()]):
                         value = "All Apps"
                     config_dict = {
                         'label': "Which Apps",
@@ -146,7 +147,7 @@ class Run(models.Model):
         range start and end times as well as output in different
         modes like HTML or PDF.
     """
-    report = models.ForeignKey(Report)
+    report = models.ForeignKey(Report, on_delete=models.CASCADE)
     create_dt = models.DateTimeField(auto_now_add=True)
     start_dt = models.DateTimeField(null=True)
     complete_dt = models.DateTimeField(null=True)
@@ -162,13 +163,11 @@ class Run(models.Model):
         verbose_name = _('Run')
         verbose_name_plural = _('Runs')
 
-    def __unicode__(self):
+    def __str__(self):
         return "Run %s for report %s" % (self.pk, self.report.pk)
 
-    @models.permalink
     def get_absolute_url(self):
-        return ('report_run_detail', [self.report.pk, self.pk])
+        return reverse('report_run_detail', args=[self.report.pk, self.pk])
 
-    @models.permalink
     def get_output_url(self):
-        return ('report_run_output', [self.report.pk, self.pk])
+        return reverse('report_run_output', args=[self.report.pk, self.pk])
