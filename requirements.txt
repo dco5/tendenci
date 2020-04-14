@@ -1,11 +1,13 @@
 Django>=1.8,<1.9
-django-formtools>=1.0
+django-formtools==2.1
 pisa
 Reportlab==3.3.0
 Pillow==4.2.1
 anyjson>=0.2.4
 django-authority>=0.4
 # temp fix - the latest version of django-avatar-3.0.0 breaks profile
+django-avatar==3.1.0
+django-appconf==1.0.2
 django-countries==3.4.1
 django-form-utils>=0.1.8
 django-localflavor==1.4.1
@@ -55,7 +57,7 @@ raven==6.0.0
 django-admin-bootstrapped==2.5.7
 django-bootstrap3==7.0.1
 django-app-namespace-template-loader==0.4
-django-annoying
+django-annoying==0.10.4
 unidecode
 Markdown
 unicodecsv
