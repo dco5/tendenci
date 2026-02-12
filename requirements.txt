@@ -1,7 +1,6 @@
 Django>=1.8,<1.9
 django-formtools==2.1
-pisa
-Reportlab==3.3.0
+Reportlab==3.5.59
 Pillow==4.2.1
 anyjson>=0.2.4
 django-authority>=0.4
